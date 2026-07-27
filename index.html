@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Robo-MLT: A Dual-System Robotic Medical Laboratory Technologist</title>
+  <meta name="description" content="Robo-MLT is a protocol-grounded dual-system framework for long-horizon medical laboratory manipulation, pairing an explicit workflow monitor with a flow-matching action executor.">
+  <meta name="keywords" content="robot learning, vision-language-action, medical laboratory automation, long-horizon manipulation, flow matching, dual-system, bimanual manipulation">
+  <meta name="robots" content="index, follow">
+
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="Robo-MLT: A Dual-System Robotic Medical Laboratory Technologist for Generative Long-Horizon Manipulation">
+  <meta property="og:description" content="A protocol-grounded dual-system framework for long-horizon medical laboratory manipulation.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Robo-MLT: A Dual-System Robotic Medical Laboratory Technologist">
+
+  <link rel="stylesheet" href="static/css/bulma.min.css">
+  <link rel="stylesheet" href="static/css/index.css">
+  <script defer src="static/js/fontawesome.all.min.js"></script>
+
+  <style>
+    /* Native <video> player: the template only styles iframes. */
+    .publication-video {
+      position: static;
+      padding-bottom: 0;
+      height: auto;
+      overflow: hidden;
+      border-radius: var(--border-radius-lg, 16px);
+      box-shadow: var(--shadow-lg);
+    }
+    .publication-video video {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: var(--border-radius-lg, 16px);
+      background: #000;
+    }
+
+    /* Figures */
+    .figure-block { margin: 2rem 0 0.5rem; }
+    .figure-block img {
+      width: 100%;
+      max-width: 100%;
+      height: auto;
+      display: block;
+      border-radius: var(--border-radius, 12px);
+      box-shadow: var(--shadow-md);
+    }
+    .figure-caption {
+      font-size: 0.92rem;
+      color: var(--text-secondary, #64748b);
+      line-height: 1.55;
+      margin-top: 0.85rem;
+      text-align: left;
+    }
+
+    /* Contributions: Bulma's `.content ol` re-applies decimal markers,
+       hence the !important on list-style. */
+    .content ol.contribution-list {
+      list-style: none !important;
+      margin-left: 0;
+      counter-reset: contrib;
+    }
+    .contribution-list li {
+      position: relative;
+      padding-left: 2.1rem;
+      margin-bottom: 1.1rem;
+      line-height: 1.65;
+      counter-increment: contrib;
+    }
+    .contribution-list li::before {
+      content: counter(contrib);
+      position: absolute;
+      left: 0;
+      top: 0.1rem;
+      width: 1.5rem;
+      height: 1.5rem;
+      border-radius: 50%;
+      background: var(--primary-color, #2563eb);
+      color: #fff;
+      font-size: 0.8rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .status-tag {
+      display: inline-block;
+      padding: 0.3rem 0.9rem;
+      border-radius: 999px;
+      background: var(--background-accent, #f1f5f9);
+      border: 1px solid var(--border-color, #e2e8f0);
+      color: var(--text-secondary, #64748b);
+      font-size: 0.85rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .button[aria-disabled="true"] { opacity: 0.75; cursor: not-allowed; }
+
+    /* The BibTeX block has long unbreakable lines. Constrain the whole
+       chain so it scrolls inside its own box instead of widening the page. */
+    .bibtex-header { flex-wrap: wrap; gap: 0.5rem; max-width: 100%; }
+    #bibtex-code {
+      overflow-x: auto;
+      max-width: 100%;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    #bibtex-code code { white-space: pre; display: block; }
+  </style>
+</head>
+<body>
+
+<button class="scroll-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="Scroll to top" aria-label="Scroll to top">
+  <i class="fas fa-chevron-up"></i>
+</button>
+
+<main id="main-content">
+
+  <!-- ===================== HERO ===================== -->
+  <section class="hero">
+    <div class="hero-body">
+      <div class="container is-max-desktop">
+        <div class="columns is-centered">
+          <div class="column has-text-centered">
+            <h1 class="title is-1 publication-title">
+              Robo-MLT: A Dual-System Robotic Medical Laboratory Technologist
+              for Generative Long-Horizon Manipulation
+            </h1>
+
+            <div class="is-size-5 publication-authors" style="margin-bottom:0.75rem;">
+              <span class="author-block">Anonymous Authors</span>
+            </div>
+
+            <div style="margin-bottom:1.5rem;">
+              <span class="status-tag">Paper under review</span>
+            </div>
+
+            <div class="publication-links">
+              <span class="link-block">
+                <a href="#" aria-disabled="true" title="Coming soon"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon"><i class="fas fa-file-pdf"></i></span>
+                  <span>Paper</span>
+                </a>
+              </span>
+              <span class="link-block">
+                <a href="#" aria-disabled="true" title="Coming soon"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon"><i class="fab fa-github"></i></span>
+                  <span>Code</span>
+                </a>
+              </span>
+              <span class="link-block">
+                <a href="#" aria-disabled="true" title="Coming soon"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon"><i class="fas fa-database"></i></span>
+                  <span>Dataset</span>
+                </a>
+              </span>
+            </div>
+            <p style="margin-top:0.9rem;font-size:0.88rem;color:var(--text-light,#94a3b8);">
+              Code and dataset will be released upon acceptance.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== REAL-WORLD ROLLOUT ===================== -->
+  <section class="hero teaser">
+    <div class="container is-max-desktop">
+      <div class="hero-body" style="padding-top:0;">
+        <h2 class="title is-3 has-text-centered">Real-World Rollout</h2>
+        <div class="publication-video">
+          <video controls preload="metadata" playsinline
+                 poster="static/videos/poster.jpg">
+            <source src="static/videos/robomlt_rollout.mp4" type="video/mp4">
+            Your browser does not support HTML5 video.
+            <a href="static/videos/robomlt_rollout.mp4">Download the video</a> instead.
+          </video>
+        </div>
+        <p class="figure-caption has-text-centered" style="text-align:center;">
+          Uncut real-world execution of Robo-MLT on the Agilex dual-arm Static-Aloha platform, including the
+          workflow-interruption scenario in which an operator removes the in-hand sample and System&nbsp;2
+          recovers through protocol-constrained replanning.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== ABSTRACT ===================== -->
+  <section class="section hero is-light">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered has-text-centered">
+        <div class="column is-four-fifths">
+          <h2 class="title is-3">Abstract</h2>
+          <div class="content has-text-justified">
+            <p>
+              Medical laboratory robots must perform contact-rich manipulation while preserving the action order
+              prescribed by operating protocols. End-to-end imitation-learning and vision&ndash;language&ndash;action
+              policies may confuse visually similar workflow stages, leading to stage-inconsistent actions during
+              long horizon execution. We present <strong>Robo-MLT</strong>, a protocol-grounded dual-system framework
+              that separates explicit workflow monitoring from continuous action generation. A frozen
+              vision&ndash;language planner reads an initial observation of the workspace and instantiates an ordered
+              sequence over an atomic-skill library. A lightweight temporal monitor then tracks execution with two
+              heads: a <em>completion head</em> advances an explicit plan pointer at subtask boundaries, while a
+              <em>back head</em> detects when an external disturbance has invalidated the preconditions of the active
+              skill and triggers bounded, protocol-constrained replanning of the remaining plan. Conditioned on the
+              active skill, a Qwen3-VL-based flow-matching executor generates continuous action chunks, while an
+              asynchronous runtime streams robot commands at 20&nbsp;Hz. Across 20 paired configurations, Robo-MLT
+              achieves end-to-end success rates of 85% and 75% on blood-gas analysis and blood-sample tube sorting,
+              respectively, compared with 70% and 60% for the strongest baseline &pi;<sub>0.5</sub>. The results
+              suggest that explicit workflow-state tracking can reduce stage-confusion errors in
+              protocol-constrained manipulation.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== METHOD OVERVIEW ===================== -->
+  <section class="section">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered">
+        <div class="column is-four-fifths">
+          <h2 class="title is-3 has-text-centered">Method Overview</h2>
+
+          <div class="content has-text-justified">
+            <p>
+              Robo-MLT follows dual-process theory, separating <strong>low-frequency semantic monitoring</strong>,
+              which maintains an explicit representation of workflow progress, from <strong>high-frequency
+              continuous action generation</strong> for fine-grained manipulation. A frozen vision&ndash;language
+              planner reads the initial workspace observation and instantiates an ordered plan over an extensible
+              atomic-skill library. <strong>System&nbsp;2</strong> then tracks that plan with a dual-head execution
+              monitor: a completion head advances the plan pointer at subtask boundaries, while a back head detects
+              when an external disturbance has invalidated the preconditions of the active skill and triggers
+              bounded, protocol-constrained replanning. <strong>System&nbsp;1</strong> executes the active skill,
+              pairing a Qwen3-VL backbone with a flow-matching action head to generate continuous action chunks. An
+              asynchronous runtime reconciles the two rates &mdash; System&nbsp;2 updates the plan at roughly
+              0.2&nbsp;Hz while System&nbsp;1 streams closed-loop commands at 20&nbsp;Hz &mdash; so explicit
+              workflow tracking costs no control bandwidth.
+            </p>
+          </div>
+
+          <div class="figure-block">
+            <img src="static/figures/system_framework.webp"
+                 alt="Overview of the Robo-MLT framework: a frozen vision-language planner feeds an ordered skill sequence to System 2, which tracks the plan and conditions System 1's flow-matching executor."/>
+            <p class="figure-caption">
+              <strong>Overview of Robo-MLT.</strong> A frozen vision&ndash;language planner maps a user command, the
+              corresponding instrument protocol, and an initial scene observation to an ordered sequence of atomic
+              skills. System&nbsp;2 tracks this plan with a dual-head pointer controller and invokes
+              protocol-constrained replanning when an external disturbance invalidates the active skill.
+              System&nbsp;1 executes the active skill with a Qwen3-VL-conditioned controller and a flow-matching
+              action head.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== CONTRIBUTIONS ===================== -->
+  <section class="section hero is-light">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered">
+        <div class="column is-four-fifths">
+          <h2 class="title is-3 has-text-centered">Contributions</h2>
+          <div class="content has-text-justified">
+            <ol class="contribution-list">
+              <li>
+                We propose <strong>Robo-MLT</strong>, a hierarchical framework that separates explicit, low-frequency
+                workflow monitoring from high-frequency generative control for long-horizon, fine-grained medical
+                laboratory manipulation.
+              </li>
+              <li>
+                We develop a lightweight, multi-frame <strong>dual-head execution monitor</strong> that tracks an
+                ordered plan over an extensible atomic-skill library, advancing the plan pointer at subtask
+                boundaries and invoking bounded, protocol-constrained replanning when an external disturbance
+                invalidates the active skill. At the planning layer, new skills can be added without retraining
+                System&nbsp;2; each new skill still requires an executable low-level policy.
+              </li>
+              <li>
+                We evaluate Robo-MLT on <strong>real-world medical laboratory tasks</strong> against representative IL
+                and VLA baselines, and analyze task-level success, per-sample completion, execution time, and
+                characteristic failure modes.
+              </li>
+            </ol>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== BIBTEX ===================== -->
+  <section class="section" id="BibTeX">
+    <div class="container is-max-desktop content">
+      <div class="bibtex-header">
+        <h2 class="title is-3" style="margin-bottom:0;">BibTeX</h2>
+        <button class="copy-bibtex-btn" onclick="copyBibTeX()" title="Copy BibTeX to clipboard">
+          <i class="fas fa-copy"></i>
+          <span class="copy-text">Copy</span>
+        </button>
+      </div>
+      <pre id="bibtex-code"><code>@article{robomlt2026,
+  title   = {Robo-MLT: A Dual-System Robotic Medical
+             Laboratory Technologist for Generative
+             Long-Horizon Manipulation},
+  author  = {Anonymous},
+  journal = {Under review},
+  year    = {2026}
+}</code></pre>
+    </div>
+  </section>
+
+  <!-- ===================== FOOTER ===================== -->
+  <footer class="footer">
+    <div class="container">
+      <div class="columns is-centered">
+        <div class="column is-8">
+          <div class="content has-text-centered">
+            <p style="font-size:0.85rem;">
+              This page was built on the
+              <a href="https://github.com/eliahuhorwitz/Academic-project-page-template" target="_blank" rel="noopener">
+                Academic Project Page Template</a>, itself adapted from
+              <a href="https://nerfies.github.io" target="_blank" rel="noopener">Nerfies</a>.
+              Released under a
+              <a href="http://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">
+                Creative Commons Attribution-ShareAlike 4.0 International License</a>.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+</main>
+
+<script>
+  function copyBibTeX() {
+    var code = document.getElementById('bibtex-code').innerText;
+    var btn = document.querySelector('.copy-bibtex-btn');
+    navigator.clipboard.writeText(code).then(function () {
+      btn.classList.add('copied');
+      setTimeout(function () { btn.classList.remove('copied'); }, 2000);
+    });
+  }
+
+  // Show the scroll-to-top button only once the user has scrolled.
+  (function () {
+    var btn = document.querySelector('.scroll-to-top');
+    function toggle() {
+      btn.classList.toggle('visible', window.scrollY > 400);
+    }
+    window.addEventListener('scroll', toggle, { passive: true });
+    toggle();
+  })();
+
+  // Disabled release links should not jump the page.
+  document.querySelectorAll('a[aria-disabled="true"]').forEach(function (a) {
+    a.addEventListener('click', function (e) { e.preventDefault(); });
+  });
+</script>
+
+</body>
+</html>
