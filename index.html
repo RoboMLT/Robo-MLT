@@ -303,11 +303,9 @@
   <section class="section">
     <div class="container is-max-desktop">
       <h2 class="title is-3 has-text-centered">Comparison with Conventional Methods</h2>
-      <p class="content has-text-justified" style="max-width:52rem;margin:0 auto 2rem;">
-        Two paradigms dominate laboratory automation, and each fails on the blood-gas workflow in a
-        characteristic way. Robo-MLT is designed to remove both failure modes.
-      </p>
 
+      <!-- Disturbance grasp: fixed-program vs. ours (routine blood tube) -->
+      <h3 class="title is-5 has-text-centered" style="margin-top:0.5rem;">Reacting to a mid-task disturbance</h3>
       <div class="columns is-variable is-6">
         <div class="column">
           <div class="publication-video">
@@ -318,43 +316,37 @@
             </video>
           </div>
           <p class="figure-caption">
-            <strong>Conventional fixed-program pipeline.</strong> The system senses the target once before
-            motion and then executes an open-loop approach&ndash;grasp&ndash;lift. When an operator moves the
-            tube mid-motion, there is no feedback path: the arm continues to the original waypoint and closes
-            the gripper on an empty slot.
+            <strong>Fixed-program pipeline.</strong> Senses the tube once, then moves open-loop; when it is
+            shifted mid-motion, the arm closes on the empty slot.
           </p>
         </div>
         <div class="column">
           <div class="publication-video">
             <video controls preload="metadata" playsinline>
-              <source src="static/videos/end_to_end_failure.mp4" type="video/mp4">
+              <source src="static/videos/our_method.mp4" type="video/mp4">
               Your browser does not support HTML5 video.
-              <a href="static/videos/end_to_end_failure.mp4">Download the video</a> instead.
+              <a href="static/videos/our_method.mp4">Download the video</a> instead.
             </video>
           </div>
           <p class="figure-caption">
-            <strong>End-to-end IL/VLA policy.</strong> With no explicit representation of workflow progress,
-            the policy cannot disambiguate the near-identical views just after insertion and just before
-            withdrawal at the analyzer inlet. It re-issues the docking (insertion) action instead of
-            withdrawing, so the tube is pushed back toward the inlet and the procedure stalls.
+            <strong>Robo-MLT (ours).</strong> Closed-loop control re-targets to the tube's new position and
+            completes the grasp.
           </p>
         </div>
       </div>
 
-      <h3 class="title is-4 has-text-centered" style="margin-top:1rem;">Robo-MLT (Ours)</h3>
+      <!-- Perceptual aliasing: repeated docking -->
+      <h3 class="title is-5 has-text-centered" style="margin-top:1.5rem;">Repeated docking under perceptual aliasing</h3>
       <div class="publication-video">
         <video controls preload="metadata" playsinline>
-          <source src="static/videos/our_method.mp4" type="video/mp4">
+          <source src="static/videos/end_to_end_failure.mp4" type="video/mp4">
           Your browser does not support HTML5 video.
-          <a href="static/videos/our_method.mp4">Download the video</a> instead.
+          <a href="static/videos/end_to_end_failure.mp4">Download the video</a> instead.
         </video>
       </div>
       <p class="figure-caption has-text-centered" style="text-align:center;">
-        Robo-MLT pins stage identity to an explicit plan pointer, so visually similar stages (insertion vs.
-        withdrawal) are distinguished by workflow position rather than appearance, while the back head detects
-        disturbances and triggers protocol-constrained replanning. System&nbsp;1 streams closed-loop
-        flow-matching actions at 20&nbsp;Hz, so the workflow completes and recovers from mid-procedure
-        interruptions.
+        <strong>End-to-end IL/VLA.</strong> Insertion and withdrawal look alike at the inlet, so the policy
+        re-issues the docking action instead of withdrawing, and the procedure stalls.
       </p>
     </div>
   </section>
