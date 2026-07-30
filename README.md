@@ -8,8 +8,7 @@ are disambiguated by *where the robot is in the protocol*, not by appearance alo
 
 This repository contains the implementation behind the accompanying paper. It is deliberately
 scoped to the method described there: two medical-lab tasks (blood gas analysis, blood sample
-tube sorting), five System-1 policies (Robo-MLT's own Qwen3-VL flow-matching executor plus the
-ACT / SmolVLA / π0 / π0.5 baselines), and the System-2 planner + completion-gate + pointer
+tube sorting), five System-1 VLA policies, and the System-2 planner + completion-gate + pointer
 controller.
 
 
