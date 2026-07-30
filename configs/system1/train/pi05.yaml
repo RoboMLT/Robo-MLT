@@ -1,0 +1,98 @@
+# System 1 — π0.5 (full) training configuration — Robo-MLT baseline experiment.
+#
+# π0.5 is a standalone dual-system VLA baseline: it autoregressively generates its own
+# subtask (high-level reasoning) internally, so at deployment it needs only the high-level
+# task instruction (no external System-2 gate). Training optimizes three losses jointly:
+# flow-matching MSE (action expert) + FAST action-token CE + subtask CE, with knowledge
+# insulation (action-loss gradients are blocked from the VLM K/V projections).
+#
+# Launch (distributed mode is configurable — see configs/accelerate/):
+#   accelerate launch --config_file configs/accelerate/zero3.yaml \
+#       -m low_level_model.training.train_system1 configs/system1/train/pi05.yaml
+#   # plain single-process (no accelerate) also works:
+#   python -m low_level_model.training.train_system1 configs/system1/train/pi05.yaml
+#   # 100-step smoke test:
+#   ... configs/system1/train/pi05.yaml steps=100 save_freq=50 wandb.enable=false
+#
+# Before first run: export HF_HOME=<path/to/huggingface_cache> and pre-download
+# `lerobot/pi05_base` (~14.5 GB) and `physical-intelligence/fast`.
+#
+# MEMORY: 3.6B params. On 2× RTX 4090D (24 GB) full-finetune needs DeepSpeed ZeRO-3
+# (configs/accelerate/zero3.yaml). Single-GPU fallback: optimizer.use_8bit=true +
+# policy.freeze_vision_encoder=true. On A100/H100-class cards use single_gpu/ddp.
+
+# ── Policy ───────────────────────────────────────────────────────────────────
+policy:
+  type: pi05_full
+  device: cuda:0
+  pretrained_path: lerobot/pi05_base   # openpi π0.5 base; from_pretrained remaps the keys
+  dtype: bfloat16
+  chunk_size: 30                       # 2 s @ 25 fps
+  n_action_steps: 30
+  max_state_dim: 32
+  max_action_dim: 32
+  tokenizer_max_length: 200            # prompt "Task: ..., State: <32 bins>\n" ~130 tokens; 48 would truncate
+  subtask_max_length: 32
+  knowledge_insulation: true
+  freeze_vision_encoder: false         # set true as a memory fallback (saves ~400M trainable)
+  gradient_checkpointing: true
+  num_inference_steps: 10
+  max_decoding_steps: 24
+  subtask_regeneration_interval: 2
+  # three-term loss weights (all 1.0 = openpi default)
+  loss_weight_flow: 1.0
+  loss_weight_action_ce: 1.0
+  loss_weight_subtask_ce: 1.0
+
+# ── Dataset ──────────────────────────────────────────────────────────────────
+dataset:
+  repo_id: <path/to/data>/TubeSort_20260628_left
+  root: null
+  video_backend: pyav
+  use_imagenet_stats: true            # VISUAL: IDENTITY; the model rescales images to [-1,1] itself
+  filter_back_events: true             # TubeSort has a back_event column
+  skill_library: null                  # use lerobot v3.0 native subtasks (meta/subtasks.parquet)
+  subtask_index_column: subtask_index
+  mask_cross_subtask_actions: false    # incompatible: PI05Pytorch.forward has no per-step loss mask
+
+# ── Training loop ─────────────────────────────────────────────────────────────
+output_dir: outputs/train_vla/pi05_TubeSort_20260628_left
+job_name: pi05_system1
+batch_size: 8
+steps: 50000
+num_workers: 4
+seed: 1000
+grad_accum_steps: 1                    # effective batch 16 (×N GPUs)
+resume: false
+
+# ── Optimizer ─────────────────────────────────────────────────────────────────
+optimizer:
+  lr: 2.5e-5
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 0.01
+  grad_clip_norm: 1.0
+  use_8bit: false                       # set true for single-GPU 8-bit AdamW fallback (needs bitsandbytes)
+
+# ── LR Scheduler (cosine warm-up then decay) ─────────────────────────────────
+scheduler:
+  warmup_steps: 1000
+  decay_steps: 30000
+  decay_lr: 2.5e-6
+
+# ── Checkpointing ─────────────────────────────────────────────────────────────
+save_checkpoint: true
+save_freq: 100
+log_freq: 50
+
+# ── Weights & Biases ─────────────────────────────────────────────────────────
+wandb:
+  enable: true
+  mode: online
+  project: RoboMLT_system1
+  entity: xdedm7-chongqing-university
+  disable_artifact: true
+
+# π0.5 has no shared-observation / delay-augmentation support — keep both off.
+max_delay_steps: 0
+shared_observation: false

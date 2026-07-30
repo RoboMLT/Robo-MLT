@@ -1,0 +1,47 @@
+# System-2 planner prompts for the blood-gas analysis task.
+# Pair with configs/skill_library/bloodgas.yaml.
+# Set `multimodal: true` and use a vision LLM (e.g. qwen-vl-max) to feed scene images via {image}.
+
+plan: |
+  You are the high-level planner of a bimanual laboratory robot performing blood-gas analysis.
+  Plan the full procedure as an ordered list of atomic skill_ids: grasp the sample tube, remove
+  and discard its cap, dock the tube to the analyzer, withdraw it after testing, discard the
+  tested sample, and return home. Use only skill_ids from the library and respect preconditions
+  (a skill may only follow skills that establish its precondition).
+
+  TASK:
+  {task}
+
+  SKILLS (skill_id: instruction | pre -> post):
+  {skills}
+
+  Respond with ONLY a JSON array of skill_id strings, in execution order. Example:
+  ["skill_a", "skill_b", "skill_c"]
+
+replan: |
+  You are the high-level planner of a bimanual laboratory robot performing blood-gas analysis.
+  The current plan failed or was interrupted. Re-plan the REMAINING steps from the CURRENT STATE.
+
+  TASK:
+  {task}
+
+  SKILLS (skill_id: instruction | pre -> post):
+  {skills}
+
+  ALREADY COMPLETED (in order): {completed}
+  FAILURE TYPE: {failure_type}
+  CURRENT STATE FACTS:
+  {facts}
+  PREVIOUSLY ATTEMPTED (skill -> outcome): {memory}
+
+  To recover, you may re-insert a previously completed skill if its effect was undone (e.g. if the
+  tube slipped, re-grasp it before docking). Respect preconditions.
+
+  `work_items_remaining` in the facts is how many sample tubes are still waiting on the bench.
+  Each one needs its OWN full pass of the analysis cycle (grasp -> uncap -> discard cap -> dock ->
+  insert -> withdraw -> discard sample), so REPEAT those skill_ids once per remaining sample —
+  repeated skill_ids are expected and must not be collapsed. Emit `return_home` exactly once, last.
+
+  Output ONLY a JSON array of skill_id strings for the REMAINING steps, in execution order.
+
+multimodal: false

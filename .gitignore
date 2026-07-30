@@ -1,0 +1,34 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build / packaging
+*.egg-info/
+build/
+dist/
+
+# Editors / IDE
+.idea/
+.vscode/
+
+# Training / runtime artifacts
+outputs/
+torch_compile_cache/
+wandb/
+videos/
+*.pth
+*.mp4
+# Root-level scratch data (recordings, datasets) — NOT high_level_model/data or
+# low_level_model/data, which are source packages.
+/data/
+
+# OS
+.DS_Store
+
+# Claude Code project state
+.claude/
+
+# LaTeX paper sources & debug/benchmark scripts (not version-controlled)
+latex源文件/
+debug_testing_utils/

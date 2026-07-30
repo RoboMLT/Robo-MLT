@@ -1,0 +1,81 @@
+# System 1 — SmolVLA training configuration for the blood-gas analysis task.
+# Usage:
+#   python -m low_level_model.training.train_system1 \
+#       configs/system1/train/smolvla_bloodgas.yaml
+# Override keys via CLI, e.g.:
+#   ... smolvla_bloodgas.yaml batch_size=16 optimizer.lr=5e-5
+# ── Policy ───────────────────────────────────────────────────────────────────
+policy:
+  type: smolvla
+  device: cuda:0
+  # Fine-tune from the released SmolVLA base checkpoint (recommended). Set to null
+  # to train from scratch and enable `load_vlm_weights: true` below.
+  pretrained_path: lerobot/smolvla_base
+  chunk_size: 30
+  n_action_steps: 30
+  max_state_dim: 32
+  max_action_dim: 32
+  # VLM backbone (SmolVLM2). When fine-tuning from `pretrained_path`, the backbone
+  # weights come from the checkpoint, so keep this false. Set true (+ pretrained_path
+  # null) only for a from-scratch run.
+  vlm_model_name: HuggingFaceTB/SmolVLM2-500M-Video-Instruct
+  load_vlm_weights: true
+  freeze_vision_encoder: false
+  train_expert_only: false
+  num_steps: 10                # flow-matching inference integration steps
+
+# ── Dataset ──────────────────────────────────────────────────────────────────
+dataset:
+  repo_id: <path/to/data>/TubeSort_20260717_left
+  root: null
+  video_backend: pyav
+  use_imagenet_stats: false    # SmolVLA normalises images internally (VISUAL: IDENTITY)
+  filter_back_events: true
+  # Per-frame atomic-skill language conditioning. With the Robo-MLT SmolVLA processor
+  # wrapper (low_level_model/models/smolvla/processor_smolvla.py) this now actually
+  # steers the policy: each frame's subtask_index -> the skill's canonical_instruction,
+  # which becomes the prompt — matching what System 2 feeds at deployment.
+#  skill_library: configs/skill_library/bloodgas.yaml
+  subtask_index_column: subtask_index
+  mask_cross_subtask_actions: true
+
+# ── Training loop ─────────────────────────────────────────────────────────────
+output_dir: outputs/train_vla/smolvla_TubeSort_20260717
+job_name: smolvla_system1_tubesort
+batch_size: 4
+steps: 60000
+num_workers: 4
+seed: 1000
+grad_accum_steps: 1
+resume: false
+
+# ── Optimizer ────────────────────────────────────────────────────────────────
+optimizer:
+  lr: 1.0e-4
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 1.0e-10
+  grad_clip_norm: 10.0
+
+# ── LR Scheduler (cosine warm-up then decay) ─────────────────────────────────
+scheduler:
+  warmup_steps: 1000
+  decay_steps: 30000
+  decay_lr: 2.5e-6
+
+# ── Checkpointing ─────────────────────────────────────────────────────────────
+save_checkpoint: true
+save_freq: 10000
+log_freq: 50
+
+# ── Weights & Biases ─────────────────────────────────────────────────────────
+wandb:
+  enable: true
+  mode: online
+  project: RoboMLT_system1
+  entity: xdedm7-chongqing-university
+  disable_artifact: true
+
+# SmolVLA has no shared-observation / delay-augmentation support — keep both off.
+max_delay_steps: 0
+shared_observation: false

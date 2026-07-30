@@ -1,0 +1,67 @@
+# Atomic-skill library for the blood-gas analysis task.
+# Adding a skill = appending an entry here (+ attaching its System-1 policy).
+# No System-2 retraining is required: matching is done in frozen SigLIP text space.
+#
+# canonical_instruction values are kept BYTE-FOR-BYTE identical to meta/subtasks.parquet of the
+# training capture (BloodGasAnalysis_20260722), in subtask_index order. The gate conditions on this
+# text via the frozen SigLIP text tower, and the closed-loop oracle plan maps each GT segment back
+# to a skill by exact text match — any wording drift there silently forces ad-hoc skill
+# registration and breaks the deployed planner.
+# Keyboard shortcuts during inference / DAgger collection:
+#   1 -> grasp_routine_tube
+#   2 -> remove_cap
+#   3 -> discard_cap
+#   4 -> dock_to_analyzer
+#   5 -> insert_to_probe
+#   6 -> withdraw_tube
+#   7 -> discard_sample
+#   8 -> return_home
+#   0 -> reset to the high-level task text
+skills:
+  - skill_id: grasp_routine_tube
+    canonical_instruction: "grasp the routine blood tube."
+    precondition_text: "The gripper is empty and the routine blood tube is within reach"
+    postcondition_text: "The gripper is closed and holding the routine blood tube"
+    system1_policy_ref: "bloodgas/grasp_routine_tube"
+
+  - skill_id: remove_cap
+    canonical_instruction: "remove the sample tube cap."
+    precondition_text: "The gripper is holding the blood gas sample tube with its cap on"
+    postcondition_text: "The sample tube cap is detached and held clear of the tube"
+    system1_policy_ref: "bloodgas/remove_cap"
+
+  - skill_id: discard_cap
+    canonical_instruction: "discard the tube cap into the waste bin."
+    precondition_text: "The detached sample tube cap is held clear of the tube"
+    postcondition_text: "The sample tube cap is dropped into the waste bin"
+    system1_policy_ref: "bloodgas/discard_cap"
+
+  - skill_id: dock_to_analyzer
+    canonical_instruction: "dock the blood gas sample tube to the blood gas analyzer."
+    precondition_text: "The uncapped blood gas sample tube is held and the analyzer is ready"
+    postcondition_text: "The blood gas sample tube is docked at the analyzer input port"
+    system1_policy_ref: "bloodgas/dock_to_analyzer"
+
+  - skill_id: insert_to_probe
+    canonical_instruction: "insert the sample tube into the analyzer probe."
+    precondition_text: "The blood gas sample tube is docked at the analyzer input port"
+    postcondition_text: "The sample tube is inserted onto the analyzer probe for testing"
+    system1_policy_ref: "bloodgas/insert_to_probe"
+
+  - skill_id: withdraw_tube
+    canonical_instruction: "withdraw the blood gas sample tube after testing is complete."
+    precondition_text: "The blood gas sample tube is on the analyzer probe and testing is done"
+    postcondition_text: "The blood gas sample tube is withdrawn and held clear of the analyzer"
+    system1_policy_ref: "bloodgas/withdraw_tube"
+
+  - skill_id: discard_sample
+    canonical_instruction: "discard the tested blood sample into the waste bin."
+    precondition_text: "The tested blood gas sample tube is held clear of the analyzer"
+    postcondition_text: "The tested blood sample is dropped into the waste bin"
+    system1_policy_ref: "bloodgas/discard_sample"
+
+  - skill_id: return_home
+    canonical_instruction: "return the robotic arm to the home position."
+    precondition_text: "The gripper is empty after discarding the tested sample"
+    postcondition_text: "The arm is back at the starting home pose"
+    system1_policy_ref: "bloodgas/return_home"

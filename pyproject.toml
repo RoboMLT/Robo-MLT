@@ -1,0 +1,50 @@
+[project]
+name = "robo-mlt"
+version = "0.1.0"
+description = "Robo-MLT: A Dual-System Robotic Medical Laboratory Technologist for Generative Long-Horizon Manipulation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "torch>=2.4",
+    "torchvision",
+    "transformers>=4.53",
+    "diffusers>=0.30",
+    "accelerate>=1.0",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "pyyaml",
+    "tqdm",
+    "requests",
+    "draccus",
+    "open-clip-torch",
+    "safetensors",
+    "termcolor",
+    "typing_extensions",
+    "opencv-python",
+    "Pillow",
+    "imageio[ffmpeg]",
+    "matplotlib",
+]
+# Not pip-installable as a package (no [build-system]): run scripts with `python -m` from the
+# repo root, as documented in README.md. This table exists so tools (dependency graphs, uv,
+# pip-compile) can read the dependency list; see requirements.txt for the same list plus notes
+# on the lerobot fork this repo needs and the optional extras below.
+
+[project.optional-dependencies]
+train-extras = ["wandb", "bitsandbytes", "deepspeed"]
+eval-extras = ["python-pptx"]
+deploy-extras = ["pynput"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+pythonpath = ["."]
+testpaths = ["high_level_model/tests", "low_level_model/tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM"]

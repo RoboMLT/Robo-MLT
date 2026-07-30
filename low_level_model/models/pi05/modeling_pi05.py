@@ -1,0 +1,2165 @@
+#!/usr/bin/env python
+
+# Copyright 2025 Physical Intelligence and The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import builtins
+import contextlib
+import logging
+import math
+import time
+from collections import deque
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, TypedDict
+_PROBING_CAPTURE: dict = {}
+
+import torch
+import torch.nn.functional as F  # noqa: N812
+from torch import Tensor, nn
+from typing_extensions import Unpack
+
+from lerobot.utils.import_utils import _transformers_available
+
+# Conditional import for type checking and lazy loading
+if TYPE_CHECKING or _transformers_available:
+    from transformers.models.auto import CONFIG_MAPPING
+    from transformers.models.gemma import modeling_gemma
+
+    from lerobot.policies.pi_gemma import (
+        PaliGemmaForConditionalGenerationWithPiGemma,
+        PiGemmaForCausalLM,
+        _gated_residual,
+        layernorm_forward,
+    )
+else:
+    CONFIG_MAPPING = None
+    modeling_gemma = None
+    PiGemmaForCausalLM = None
+    PaliGemmaForConditionalGenerationWithPiGemma = None
+    _gated_residual = None
+    layernorm_forward = None
+
+from lerobot.configs.policies import PreTrainedConfig
+from low_level_model.models.pi05.configuration_pi05 import DEFAULT_IMAGE_SIZE, PI05FullConfig
+from lerobot.policies.pretrained import PreTrainedPolicy, T
+from lerobot.policies.rtc.modeling_rtc import RTCProcessor
+from lerobot.utils.constants import (
+    ACTION,
+    OBS_LANGUAGE_ATTENTION_MASK,
+    OBS_LANGUAGE_TOKENS,
+    OPENPI_ATTENTION_MASK_VALUE,
+    OBS_LANGUAGE_USER_PROMPT_TOKENS,
+    OBS_LANGUAGE_USER_PROMPT_ATTENTION_MASK,
+    OBS_LANGUAGE_SUBTASK_TOKENS,
+    OBS_LANGUAGE_SUBTASK_ATTENTION_MASK,
+    ACTION_TOKENS,
+    ACTION_TOKEN_MASK,
+)
+class ActionSelectKwargs(TypedDict, total=False):
+    inference_delay: int | None
+    prev_chunk_left_over: Tensor | None
+    execution_horizon: int | None
+
+
+def get_safe_dtype(target_dtype, device_type):
+    """Get a safe dtype for the given device type."""
+    if device_type == "mps" and target_dtype == torch.float64:
+        return torch.float32
+    if device_type == "cpu":
+        # CPU doesn't support bfloat16, use float32 instead
+        if target_dtype == torch.bfloat16:
+            return torch.float32
+        if target_dtype == torch.float64:
+            return torch.float64
+    return target_dtype
+
+
+def create_sinusoidal_pos_embedding(  # see openpi `create_sinusoidal_pos_embedding` (exact copy)
+        time: torch.Tensor, dimension: int, min_period: float, max_period: float, device="cpu"
+) -> Tensor:
+    """Computes sine-cosine positional embedding vectors for scalar positions."""
+    if dimension % 2 != 0:
+        raise ValueError(f"dimension ({dimension}) must be divisible by 2")
+
+    if time.ndim != 1:
+        raise ValueError("The time tensor is expected to be of shape `(batch_size, )`.")
+
+    dtype = get_safe_dtype(torch.float64, device.type)
+    fraction = torch.linspace(0.0, 1.0, dimension // 2, dtype=dtype, device=device)
+    period = min_period * (max_period / min_period) ** fraction
+
+    # Compute the outer product
+    scaling_factor = 1.0 / period * 2 * math.pi
+    sin_input = scaling_factor[None, :] * time[:, None]
+    return torch.cat([torch.sin(sin_input), torch.cos(sin_input)], dim=1)
+
+
+def sample_beta(alpha, beta, bsize, device):  # see openpi `sample_beta` (exact copy)
+    alpha_t = torch.as_tensor(alpha, dtype=torch.float32, device=device)
+    beta_t = torch.as_tensor(beta, dtype=torch.float32, device=device)
+    dist = torch.distributions.Beta(alpha_t, beta_t)
+    return dist.sample((bsize,))
+
+
+def make_att_2d_masks(pad_masks, att_masks):  # see openpi `make_att_2d_masks` (exact copy)
+    """Copied from big_vision.
+
+    Tokens can attend to valid inputs tokens which have a cumulative mask_ar
+    smaller or equal to theirs. This way `mask_ar` int[B, N] can be used to
+    setup several types of attention, for example:
+
+      [[1 1 1 1 1 1]]: pure causal attention.
+
+      [[0 0 0 1 1 1]]: prefix-lm attention. The first 3 tokens can attend between
+          themselves and the last 3 tokens have a causal attention. The first
+          entry could also be a 1 without changing behaviour.
+
+      [[1 0 1 0 1 0 0 1 0 0]]: causal attention between 4 blocks. Tokens of a
+          block can attend all previous blocks and all tokens on the same block.
+
+    Args:
+      input_mask: bool[B, N] true if its part of the input, false if padding.
+      mask_ar: int32[B, N] mask that's 1 where previous tokens cannot depend on
+        it and 0 where it shares the same attention mask as the previous token.
+    """
+    if att_masks.ndim != 2:
+        raise ValueError(att_masks.ndim)
+    if pad_masks.ndim != 2:
+        raise ValueError(pad_masks.ndim)
+
+    cumsum = torch.cumsum(att_masks, dim=1)
+    att_2d_masks = cumsum[:, None, :] <= cumsum[:, :, None]
+    pad_2d_masks = pad_masks[:, None, :] * pad_masks[:, :, None]
+    return att_2d_masks & pad_2d_masks
+
+
+def pad_vector(vector, new_dim):
+    """Pad the last dimension of a vector to new_dim with zeros.
+
+    Can be (batch_size x sequence_length x features_dimension)
+    or (batch_size x features_dimension)
+    """
+    if vector.shape[-1] >= new_dim:
+        return vector
+    return F.pad(vector, (0, new_dim - vector.shape[-1]))
+
+
+def resize_with_pad_torch(  # see openpi `resize_with_pad_torch` (exact copy)
+        images: torch.Tensor,
+        height: int,
+        width: int,
+        mode: str = "bilinear",
+) -> torch.Tensor:
+    """PyTorch version of resize_with_pad. Resizes an image to a target height and width without distortion
+    by padding with black. If the image is float32, it must be in the range [-1, 1].
+
+    Args:
+        images: Tensor of shape [*b, h, w, c] or [*b, c, h, w]
+        height: Target height
+        width: Target width
+        mode: Interpolation mode ('bilinear', 'nearest', etc.)
+
+    Returns:
+        Resized and padded tensor with same shape format as input
+    """
+    # Check if input is in channels-last format [*b, h, w, c] or channels-first [*b, c, h, w]
+    if images.shape[-1] <= 4:  # Assume channels-last format
+        channels_last = True
+        if images.dim() == 3:
+            images = images.unsqueeze(0)  # Add batch dimension
+        images = images.permute(0, 3, 1, 2)  # [b, h, w, c] -> [b, c, h, w]
+    else:
+        channels_last = False
+        if images.dim() == 3:
+            images = images.unsqueeze(0)  # Add batch dimension
+
+    batch_size, channels, cur_height, cur_width = images.shape
+
+    # Calculate resize ratio
+    ratio = max(cur_width / width, cur_height / height)
+    resized_height = int(cur_height / ratio)
+    resized_width = int(cur_width / ratio)
+
+    # Resize
+    resized_images = F.interpolate(
+        images,
+        size=(resized_height, resized_width),
+        mode=mode,
+        align_corners=False if mode == "bilinear" else None,
+    )
+
+    # Handle dtype-specific clipping
+    if images.dtype == torch.uint8:
+        resized_images = torch.round(resized_images).clamp(0, 255).to(torch.uint8)
+    elif images.dtype == torch.float32:
+        resized_images = resized_images.clamp(-1.0, 1.0)
+    else:
+        raise ValueError(f"Unsupported image dtype: {images.dtype}")
+
+    # Calculate padding
+    pad_h0, remainder_h = divmod(height - resized_height, 2)
+    pad_h1 = pad_h0 + remainder_h
+    pad_w0, remainder_w = divmod(width - resized_width, 2)
+    pad_w1 = pad_w0 + remainder_w
+
+    # Pad
+    constant_value = 0 if images.dtype == torch.uint8 else -1.0
+    padded_images = F.pad(
+        resized_images,
+        (pad_w0, pad_w1, pad_h0, pad_h1),  # left, right, top, bottom
+        mode="constant",
+        value=constant_value,
+    )
+
+    # Convert back to original format if needed
+    if channels_last:
+        padded_images = padded_images.permute(0, 2, 3, 1)  # [b, c, h, w] -> [b, h, w, c]
+
+    return padded_images
+
+
+def capture_attn_weights(layer_idx, query_states, key_states, scaling, attention_mask):
+    """Capture softmax attention weights into _PROBING_CAPTURE when probing is enabled.
+
+    When ``_PROBING_CAPTURE["requires_grad"]`` is True the scores stay on-device
+    and in the autograd graph so that a downstream ``loss.backward()`` can populate
+    ``attn.grad`` for Jacobian-based causal analysis.
+    """
+    if not _PROBING_CAPTURE.get("enabled"):
+        return
+    capture_all = _PROBING_CAPTURE.get("all_layers", False)
+    target_layer = _PROBING_CAPTURE.get("target_layer", None)
+    if not capture_all:
+        # Single-layer mode: capture target_layer (default: 0)
+        if layer_idx != (target_layer if target_layer is not None else 0):
+            return
+    req_grad = _PROBING_CAPTURE.get("requires_grad", False)
+
+    if req_grad:
+        # Jacobian mode: keep on GPU, keep in autograd graph, retain grad
+        scores = torch.matmul(query_states.float(), key_states.float().transpose(-2, -1)) * scaling
+        if attention_mask is not None:
+            scores = scores + attention_mask.float()
+        attn = torch.softmax(scores, dim=-1)
+        attn.retain_grad()
+    else:
+        # Standard mode: detached, CPU
+        with torch.no_grad():
+            scores = torch.matmul(query_states.float(), key_states.float().transpose(-2, -1)) * scaling
+            if attention_mask is not None:
+                scores = scores + attention_mask.float()
+            attn = torch.softmax(scores, dim=-1).cpu()
+
+    if capture_all:
+        if "attn_weights_by_layer" not in _PROBING_CAPTURE:
+            _PROBING_CAPTURE["attn_weights_by_layer"] = {}
+        _PROBING_CAPTURE["attn_weights_by_layer"][layer_idx] = attn
+    else:
+        _PROBING_CAPTURE["attn_weights"] = attn
+
+
+# Define the complete layer computation function for gradient checkpointing (without knowledge insulation)
+def compute_layer_complete(
+        layer_idx, inputs_embeds, attention_mask, position_ids, adarms_cond, paligemma, gemma_expert
+):
+    """Compute a single transformer layer with fused attention across VLM and action expert (no knowledge insulation)."""
+    models = [paligemma.language_model, gemma_expert.model]
+    query_states = []
+    key_states = []
+    value_states = []
+    gates = []
+    for i, hidden_states in enumerate(inputs_embeds):
+        layer = models[i].layers[layer_idx]
+        hidden_states, gate = layer.input_layernorm(hidden_states, cond=adarms_cond[i])  # noqa: PLW2901
+        gates.append(gate)
+        input_shape = hidden_states.shape[:-1]
+        hidden_shape = (*input_shape, -1, layer.self_attn.head_dim)
+        query_state = layer.self_attn.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        key_state = layer.self_attn.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        value_state = layer.self_attn.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        query_states.append(query_state)
+        key_states.append(key_state)
+        value_states.append(value_state)
+    # Concatenate and process attention
+    query_states = torch.cat(query_states, dim=2)
+    key_states = torch.cat(key_states, dim=2)
+    value_states = torch.cat(value_states, dim=2)
+    dummy_tensor = torch.zeros(
+        query_states.shape[0],
+        query_states.shape[2],
+        query_states.shape[-1],
+        device=query_states.device,
+        dtype=query_states.dtype,
+    )
+    cos, sin = paligemma.model.language_model.rotary_emb(dummy_tensor, position_ids)
+    query_states, key_states = modeling_gemma.apply_rotary_pos_emb(
+        query_states, key_states, cos, sin, unsqueeze_dim=1
+    )
+    batch_size = query_states.shape[0]
+    scaling = paligemma.language_model.layers[layer_idx].self_attn.scaling
+    capture_attn_weights(layer_idx, query_states, key_states, scaling, attention_mask)
+    # Attention computation
+    if _PROBING_CAPTURE.get("requires_grad") and _PROBING_CAPTURE.get("attn_weights") is not None:
+        # Jacobian mode: use captured attention (on GPU, in autograd graph) so that
+        # loss.backward() computes d(loss)/d(captured_attn).  The captured tensor
+        # replaces eager_attention_forward, putting it on the real computation path.
+        captured_attn = _PROBING_CAPTURE["attn_weights"]
+        num_kv_groups = paligemma.language_model.layers[layer_idx].self_attn.num_key_value_groups
+        v_rep = modeling_gemma.repeat_kv(value_states, num_kv_groups)
+        att_output = torch.matmul(captured_attn.to(query_states.dtype), v_rep)
+        att_output = att_output.transpose(1, 2).contiguous()
+    else:
+        att_output, _ = modeling_gemma.eager_attention_forward(
+            paligemma.language_model.layers[layer_idx].self_attn,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            scaling,
+        )
+    # Get head_dim from the current layer, not from the model
+    head_dim = paligemma.language_model.layers[layer_idx].self_attn.head_dim
+    att_output = att_output.reshape(batch_size, -1, 1 * 8 * head_dim)
+    # Process layer outputs
+    outputs_embeds = []
+    start_pos = 0
+    for i, hidden_states in enumerate(inputs_embeds):
+        layer = models[i].layers[layer_idx]
+        end_pos = start_pos + hidden_states.shape[1]
+        if att_output.dtype != layer.self_attn.o_proj.weight.dtype:
+            att_output = att_output.to(layer.self_attn.o_proj.weight.dtype)
+        out_emb = layer.self_attn.o_proj(att_output[:, start_pos:end_pos])
+        # first residual
+        out_emb = _gated_residual(hidden_states, out_emb, gates[i])
+        after_first_residual = out_emb.clone()
+        out_emb, gate = layer.post_attention_layernorm(out_emb, cond=adarms_cond[i])
+        # Convert to bfloat16 if the next layer (mlp) uses bfloat16
+        if layer.mlp.up_proj.weight.dtype == torch.bfloat16:
+            out_emb = out_emb.to(dtype=torch.bfloat16)
+        out_emb = layer.mlp(out_emb)
+        # second residual
+        out_emb = _gated_residual(after_first_residual, out_emb, gate)
+        outputs_embeds.append(out_emb)
+        start_pos = end_pos
+    return outputs_embeds
+
+
+# Define the complete layer computation function with knowledge insulation for gradient checkpointing
+def compute_layer_complete_knowledge_insulation(
+        layer_idx, inputs_embeds, attention_mask, position_ids, adarms_cond, paligemma, gemma_expert
+):
+    """
+    Compute a single transformer layer with fused attention across VLM and action expert.
+
+    This implements knowledge insulation
+
+    Forward pass:
+        - VLM tokens (backbone) and action tokens (expert) are processed together
+        - Action queries CAN attend to VLM keys/values (cross-attention)
+        - VLM queries attend to all tokens normally
+
+    Backward pass (KI):
+        - Gradients from action tokens MUST NOT flow into VLM keys/values
+        - This prevents the action expert's loss (flow-matching/diffusion) from
+          updating the VLM backbone parameters through the K/V projections
+        - VLM self-attention gradients remain unchanged
+        - Action self-attention gradients remain unchanged
+
+    Implementation:
+        - Split attention into two parts: VLM queries and action queries
+        - VLM queries use original (non-detached) K/V for full gradient flow
+        - Action queries use detached VLM K/V (stops gradients) + normal action K/V
+        - Results are concatenated to produce the same output as unified attention
+
+    Args:
+        layer_idx: Index of the current transformer layer
+        inputs_embeds: List of [vlm_embeds, action_embeds] tensors
+        attention_mask: 4D attention mask (B, 1, total_len, total_len)
+        position_ids: Position IDs for rotary embeddings
+        adarms_cond: Conditioning for adaptive RMS norm [vlm_cond, action_cond]
+        paligemma: The VLM (PaliGemma) model
+        gemma_expert: The action expert (Gemma) model
+
+    Returns:
+        outputs_embeds: List of [vlm_output, action_output] tensors
+    """
+    models = [paligemma.language_model, gemma_expert.model]
+    query_states = []
+    key_states = []
+    value_states = []
+    gates = []
+
+    # this tracks vlm (backbone) token length for knowledge insulation
+    # inputs_embeds[0] = vlm tokens, inputs_embeds[1] = action expert tokens
+    vlm_len = inputs_embeds[0].shape[1]
+
+    for i, hidden_states in enumerate(inputs_embeds):
+        layer = models[i].layers[layer_idx]
+        hidden_states, gate = layer.input_layernorm(hidden_states, cond=adarms_cond[i])  # noqa: PLW2901
+        gates.append(gate)
+        input_shape = hidden_states.shape[:-1]
+        hidden_shape = (*input_shape, -1, layer.self_attn.head_dim)
+        query_state = layer.self_attn.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        key_state = layer.self_attn.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        value_state = layer.self_attn.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        query_states.append(query_state)
+        key_states.append(key_state)
+        value_states.append(value_state)
+
+    # concat Q/K/V across VLM and action tokens
+    # (B, num_heads, vlm_len + action_len, head_dim)
+    query_states = torch.cat(query_states, dim=2)
+    key_states = torch.cat(key_states, dim=2)
+    value_states = torch.cat(value_states, dim=2)
+
+    # Apply rotary position embeddings
+    dummy_tensor = torch.zeros(
+        query_states.shape[0],
+        query_states.shape[2],
+        query_states.shape[-1],
+        device=query_states.device,
+        dtype=query_states.dtype,
+    )
+    cos, sin = paligemma.model.language_model.rotary_emb(dummy_tensor, position_ids)
+    query_states, key_states = modeling_gemma.apply_rotary_pos_emb(
+        query_states, key_states, cos, sin, unsqueeze_dim=1
+    )
+
+    batch_size = query_states.shape[0]
+    scaling = paligemma.language_model.layers[layer_idx].self_attn.scaling
+    capture_attn_weights(layer_idx, query_states, key_states, scaling, attention_mask)
+
+    if _PROBING_CAPTURE.get("requires_grad") and _PROBING_CAPTURE.get("attn_weights") is not None:
+        # Jacobian mode: use captured attention (on GPU, in autograd graph) so that
+        # loss.backward() computes d(loss)/d(captured_attn).  Knowledge insulation
+        # only affects gradient flow (via detach), not values, so skipping it here
+        # produces numerically identical output.
+        captured_attn = _PROBING_CAPTURE["attn_weights"]
+        num_kv_groups = paligemma.language_model.layers[layer_idx].self_attn.num_key_value_groups
+        v_rep = modeling_gemma.repeat_kv(value_states, num_kv_groups)
+        att_output = torch.matmul(captured_attn.to(query_states.dtype), v_rep)
+        att_output = att_output.transpose(1, 2).contiguous()
+    else:
+        # KNOWLEDGE INSULATION
+        # split queries into vlm (backbone) and action (expert) parts
+        Q_vlm = query_states[:, :, :vlm_len, :]  # (B, num_heads, vlm_len, head_dim)
+        Q_action = query_states[:, :, vlm_len:, :]  # (B, num_heads, action_len, head_dim)
+
+        # split K/V into vlm and action parts
+        K_vlm = key_states[:, :, :vlm_len, :]  # (B, num_kv_heads, vlm_len, head_dim)
+        K_action = key_states[:, :, vlm_len:, :]  # (B, num_kv_heads, action_len, head_dim)
+        V_vlm = value_states[:, :, :vlm_len, :]  # (B, num_kv_heads, vlm_len, head_dim)
+        V_action = value_states[:, :, vlm_len:, :]  # (B, num_kv_heads, action_len, head_dim)
+
+        # create detached vlm K/V for action queries
+        # .detach() stops gradient flow: action loss wont backprop into VLM's K/V projections
+        K_vlm_detached = K_vlm.detach()
+        V_vlm_detached = V_vlm.detach()
+
+        # K/V for VLM queries: use original (full gradient flow for VLM self-attention)
+        K_for_vlm = key_states  # [K_vlm, K_action]
+        V_for_vlm = value_states  # [V_vlm, V_action]
+
+        # K/V for action queries: detached VLM K/V + normal action K/V
+        # knowledge insulation: action queries can "see" VLM K/V
+        # in forward pass, but gradients are blocked in backward pass
+        K_for_action = torch.cat([K_vlm_detached, K_action], dim=2)
+        V_for_action = torch.cat([V_vlm_detached, V_action], dim=2)
+
+        # split attention mask for vlm and action queries
+        # attention_mask shape: (B, 1, total_len, total_len)
+        mask_for_vlm = attention_mask[:, :, :vlm_len, :]  # (B, 1, vlm_len, total_len)
+        mask_for_action = attention_mask[:, :, vlm_len:, :]  # (B, 1, action_len, total_len)
+
+        # compute attention for vlm queries (normal gradient flow)
+        att_output_vlm, _ = modeling_gemma.eager_attention_forward(
+            paligemma.language_model.layers[layer_idx].self_attn,
+            Q_vlm,
+            K_for_vlm,
+            V_for_vlm,
+            mask_for_vlm,
+            scaling,
+        )
+
+        # compute attention for action queries (insulated from vlm K/V gradients)
+        att_output_action, _ = modeling_gemma.eager_attention_forward(
+            paligemma.language_model.layers[layer_idx].self_attn,
+            Q_action,
+            K_for_action,
+            V_for_action,
+            mask_for_action,
+            scaling,
+        )
+
+        # concat attention outputs to match original unified attention output shape
+        # att_output shape after eager_attention_forward: (B, seq_len, num_heads * head_dim)
+        att_output = torch.cat([att_output_vlm, att_output_action], dim=1)
+
+    # get head_dim from the current layer, not from the model
+    head_dim = paligemma.language_model.layers[layer_idx].self_attn.head_dim
+    att_output = att_output.reshape(batch_size, -1, 1 * 8 * head_dim)
+
+    # process layer outputs (MLP, residuals, etc.)
+    outputs_embeds = []
+    start_pos = 0
+    for i, hidden_states in enumerate(inputs_embeds):
+        layer = models[i].layers[layer_idx]
+        end_pos = start_pos + hidden_states.shape[1]
+        if att_output.dtype != layer.self_attn.o_proj.weight.dtype:
+            att_output = att_output.to(layer.self_attn.o_proj.weight.dtype)
+        out_emb = layer.self_attn.o_proj(att_output[:, start_pos:end_pos])
+        # first residual
+        out_emb = _gated_residual(hidden_states, out_emb, gates[i])
+        after_first_residual = out_emb.clone()
+        out_emb, gate = layer.post_attention_layernorm(out_emb.clone(), cond=adarms_cond[i])
+        # convert to bfloat16 if the next layer (mlp) uses bfloat16
+        if layer.mlp.up_proj.weight.dtype == torch.bfloat16:
+            out_emb = out_emb.to(dtype=torch.bfloat16)
+        out_emb = layer.mlp(out_emb)
+        # second residual
+        out_emb = _gated_residual(after_first_residual, out_emb, gate)
+        outputs_embeds.append(out_emb)
+        start_pos = end_pos
+    return outputs_embeds
+
+
+class GemmaConfig:  # see openpi `gemma.py: Config`
+    """Configuration for Gemma model variants."""
+
+    def __init__(self, width, depth, mlp_dim, num_heads, num_kv_heads, head_dim):
+        self.width = width
+        self.depth = depth
+        self.mlp_dim = mlp_dim
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+        self.head_dim = head_dim
+
+
+def get_gemma_config(variant: str) -> GemmaConfig:  # see openpi `gemma.py: get_config`
+    """Returns config for specified gemma variant."""
+    if variant == "gemma_300m":
+        return GemmaConfig(
+            width=1024,
+            depth=18,
+            mlp_dim=4096,
+            num_heads=8,
+            num_kv_heads=1,
+            head_dim=256,
+        )
+    elif variant == "gemma_2b":
+        return GemmaConfig(
+            width=2048,
+            depth=18,
+            mlp_dim=16_384,
+            num_heads=8,
+            num_kv_heads=1,
+            head_dim=256,
+        )
+    else:
+        raise ValueError(f"Unknown variant: {variant}")
+
+
+class PaliGemmaWithExpertModel(nn.Module):  # see openpi `gemma_pytorch.py: PaliGemmaWithExpertModel` this class is almost a exact copy of PaliGemmaWithExpertModel in openpi
+    """PaliGemma model with action expert for PI05."""
+
+    def __init__(
+            self,
+            vlm_config,
+            action_expert_config,
+            use_adarms=None,
+            precision: Literal["bfloat16", "float32"] = "bfloat16",
+            image_size: int = DEFAULT_IMAGE_SIZE,
+            freeze_vision_encoder: bool = False,
+            train_expert_only: bool = False,
+            knowledge_insulation: bool = True,
+    ):
+        if use_adarms is None:
+            use_adarms = [False, False]
+        super().__init__()
+        self.freeze_vision_encoder = freeze_vision_encoder
+        self.train_expert_only = train_expert_only
+        self.knowledge_insulation = knowledge_insulation
+
+        vlm_config_hf = CONFIG_MAPPING["paligemma"]()
+        vlm_config_hf._vocab_size = 257152  # noqa: SLF001
+        vlm_config_hf.image_token_index = 257152
+        vlm_config_hf.text_config.hidden_size = vlm_config.width
+        vlm_config_hf.text_config.intermediate_size = vlm_config.mlp_dim
+        vlm_config_hf.text_config.num_attention_heads = vlm_config.num_heads
+        vlm_config_hf.text_config.head_dim = vlm_config.head_dim
+        vlm_config_hf.text_config.num_hidden_layers = vlm_config.depth
+        vlm_config_hf.text_config.num_key_value_heads = vlm_config.num_kv_heads
+        vlm_config_hf.text_config.hidden_activation = "gelu_pytorch_tanh"
+        vlm_config_hf.text_config.dtype = "float32"
+        vlm_config_hf.text_config.vocab_size = 257152
+        vlm_config_hf.text_config.use_adarms = use_adarms[0]
+        vlm_config_hf.text_config.adarms_cond_dim = vlm_config.width if use_adarms[0] else None
+        vlm_config_hf.vision_config.image_size = image_size
+        vlm_config_hf.vision_config.intermediate_size = 4304
+        vlm_config_hf.vision_config.projection_dim = 2048
+        vlm_config_hf.vision_config.projector_hidden_act = "gelu_fast"
+        vlm_config_hf.vision_config.dtype = "float32"
+
+        action_expert_config_hf = CONFIG_MAPPING["gemma"](
+            head_dim=action_expert_config.head_dim,
+            hidden_size=action_expert_config.width,
+            intermediate_size=action_expert_config.mlp_dim,
+            num_attention_heads=action_expert_config.num_heads,
+            num_hidden_layers=action_expert_config.depth,
+            num_key_value_heads=action_expert_config.num_kv_heads,
+            vocab_size=257152,
+            hidden_activation="gelu_pytorch_tanh",
+            dtype="float32",
+            use_adarms=use_adarms[1],
+            adarms_cond_dim=action_expert_config.width if use_adarms[1] else None,
+        )
+
+        self.paligemma = PaliGemmaForConditionalGenerationWithPiGemma(config=vlm_config_hf)
+        self.gemma_expert = PiGemmaForCausalLM(config=action_expert_config_hf)
+        self.gemma_expert.model.embed_tokens = None
+
+        # lm_head is not used in the action_expert
+        if hasattr(self.gemma_expert, "lm_head"):
+            del self.gemma_expert.lm_head
+
+        self.to_bfloat16_for_selected_params(precision)
+        self._set_requires_grad()
+
+    def to_bfloat16_for_selected_params(self, precision: Literal["bfloat16", "float32"] = "bfloat16"):
+        if precision == "bfloat16":
+            self.to(dtype=torch.bfloat16)
+        elif precision == "float32":
+            self.to(dtype=torch.float32)
+            return
+        else:
+            raise ValueError(f"Invalid precision: {precision}")
+
+        params_to_keep_float32 = [
+            "vision_tower",           # entire SigLIP encoder stays float32
+            "multi_modal_projector",  # vision→language projection stays float32
+            "input_layernorm",
+            "post_attention_layernorm",
+            "model.norm",
+        ]
+
+        for name, param in self.named_parameters():
+            if any(selector in name for selector in params_to_keep_float32):
+                param.data = param.data.to(dtype=torch.float32)
+
+    def _set_requires_grad(self):
+        if self.freeze_vision_encoder:
+            self.paligemma.model.vision_tower.eval()
+            for param in self.paligemma.model.vision_tower.parameters():
+                param.requires_grad = False
+        if self.train_expert_only:
+            self.paligemma.eval()
+            for param in self.paligemma.parameters():
+                param.requires_grad = False
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.freeze_vision_encoder:
+            self.paligemma.model.vision_tower.eval()
+        if self.train_expert_only:
+            self.paligemma.eval()
+
+    def embed_image(self, image: torch.Tensor):
+        image_outputs = self.paligemma.model.get_image_features(image)
+        # transformers>=4.56 returns the projected image-token features directly
+        # as a Tensor.  Older LeRobot/transformers combinations returned an output
+        # object exposing the same features through ``pooler_output``.
+        if isinstance(image_outputs, Tensor):
+            image_features = image_outputs
+        elif hasattr(image_outputs, "pooler_output"):
+            image_features = image_outputs.pooler_output
+        else:
+            raise TypeError(
+                "PaliGemma get_image_features() returned an unsupported value of type "
+                f"{type(image_outputs).__name__}; expected Tensor or an object with pooler_output"
+            )
+        return image_features * self.paligemma.config.text_config.hidden_size**0.5
+
+    def embed_language_tokens(self, tokens: torch.Tensor):
+        return self.paligemma.language_model.embed_tokens(tokens)
+
+    def forward(
+            self,
+            attention_mask: torch.Tensor | None = None,
+            position_ids: torch.LongTensor | None = None,
+            past_key_values: list[torch.FloatTensor] | None = None,
+            inputs_embeds: list[torch.FloatTensor] | None = None,
+            use_cache: bool | None = None,
+            adarms_cond: list[torch.Tensor] | None = None,
+    ):
+
+        if adarms_cond is None:
+            adarms_cond = [None, None]
+        if inputs_embeds[1] is None:
+            prefix_output = self.paligemma.language_model.forward(
+                inputs_embeds=inputs_embeds[0],
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                adarms_cond=adarms_cond[0] if adarms_cond is not None else None,
+            )
+            prefix_past_key_values = prefix_output.past_key_values
+            prefix_output = prefix_output.last_hidden_state
+            suffix_output = None
+        elif inputs_embeds[0] is None:
+            suffix_output = self.gemma_expert.model.forward(
+                inputs_embeds=inputs_embeds[1],
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                adarms_cond=adarms_cond[1] if adarms_cond is not None else None,
+            )
+            suffix_output = suffix_output.last_hidden_state
+            prefix_output = None
+            prefix_past_key_values = None
+        else:
+            models = [self.paligemma.language_model, self.gemma_expert.model]
+            num_layers = self.paligemma.config.text_config.num_hidden_layers
+
+            # Check if gradient checkpointing is enabled for any of the models
+            use_gradient_checkpointing = (
+                                                 hasattr(self.gemma_expert.model, "gradient_checkpointing")
+                                                 and self.gemma_expert.model.gradient_checkpointing
+                                                 and self.training
+                                         ) or (hasattr(self,
+                                                       "gradient_checkpointing") and self.gradient_checkpointing and self.training)
+
+            # Select the appropriate layer computation function based on knowledge_insulation
+            layer_compute_fn = (
+                compute_layer_complete_knowledge_insulation if self.knowledge_insulation else compute_layer_complete
+            )
+
+            # Process all layers with gradient checkpointing if enabled
+            for layer_idx in range(num_layers):
+                if use_gradient_checkpointing:
+                    inputs_embeds = torch.utils.checkpoint.checkpoint(
+                        layer_compute_fn,
+                        layer_idx,
+                        inputs_embeds,
+                        attention_mask,
+                        position_ids,
+                        adarms_cond,
+                        use_reentrant=False,
+                        preserve_rng_state=False,
+                        paligemma=self.paligemma,
+                        gemma_expert=self.gemma_expert,
+                    )
+                else:
+                    inputs_embeds = layer_compute_fn(
+                        layer_idx,
+                        inputs_embeds,
+                        attention_mask,
+                        position_ids,
+                        adarms_cond,
+                        paligemma=self.paligemma,
+                        gemma_expert=self.gemma_expert,
+                    )
+
+            # final norm
+            def compute_final_norms(inputs_embeds, adarms_cond):
+                outputs_embeds = []
+                for i, hidden_states in enumerate(inputs_embeds):
+                    out_emb, _ = models[i].norm(hidden_states, cond=adarms_cond[i])
+                    outputs_embeds.append(out_emb)
+                return outputs_embeds
+
+            # Apply gradient checkpointing to final norm if enabled
+            if use_gradient_checkpointing:
+                outputs_embeds = torch.utils.checkpoint.checkpoint(
+                    compute_final_norms,
+                    inputs_embeds,
+                    adarms_cond,
+                    use_reentrant=False,
+                    preserve_rng_state=False,
+                )
+            else:
+                outputs_embeds = compute_final_norms(inputs_embeds, adarms_cond)
+
+            prefix_output = outputs_embeds[0]
+            suffix_output = outputs_embeds[1]
+            prefix_past_key_values = None
+
+        return [prefix_output, suffix_output], prefix_past_key_values
+
+
+class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
+    """Core PI05 PyTorch model."""
+
+    def __init__(self, config: PI05FullConfig, rtc_processor: RTCProcessor | None = None):
+        super().__init__()
+        self.config = config
+        self.rtc_processor = rtc_processor
+
+        paligemma_config = get_gemma_config(config.paligemma_variant)
+        action_expert_config = get_gemma_config(config.action_expert_variant)
+
+        if config.image_resolution[0] != config.image_resolution[1]:
+            raise ValueError(
+                f"PaliGemma expects square image resolution, invalid resolution: {config.image_resolution}"
+            )
+
+        self.paligemma_with_expert = PaliGemmaWithExpertModel(
+            paligemma_config,
+            action_expert_config,
+            use_adarms=[False, True],
+            precision=config.dtype,
+            image_size=config.image_resolution[0],
+            freeze_vision_encoder=config.freeze_vision_encoder,
+            train_expert_only=config.train_expert_only,
+            knowledge_insulation=config.knowledge_insulation,
+        )
+
+        self.action_in_proj = nn.Linear(config.max_action_dim, action_expert_config.width)
+        self.action_out_proj = nn.Linear(action_expert_config.width, config.max_action_dim)
+
+        self.time_mlp_in = nn.Linear(action_expert_config.width, action_expert_config.width)
+        self.time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
+
+        # Initialize gradient checkpointing flag
+        self.gradient_checkpointing_enabled = False
+
+        # Compile model if requested
+        if config.compile_model:
+            torch.set_float32_matmul_precision("high")
+            self.sample_actions = torch.compile(self.sample_actions, mode=config.compile_mode)
+            # Also compile the main forward pass used during training
+            self.forward = torch.compile(self.forward, mode=config.compile_mode)
+
+        from transformers import AutoTokenizer
+
+        # Load PaliGemma tokenizer for token conversion
+        self._paligemma_tokenizer = AutoTokenizer.from_pretrained(
+            config.text_tokenizer_name, trust_remote_code=True, add_eos_token=True, add_bos_token=False
+        )
+
+    def gradient_checkpointing_enable(self):
+        """Enable gradient checkpointing for memory optimization."""
+        self.gradient_checkpointing_enabled = True
+        self.paligemma_with_expert.paligemma.model.language_model.gradient_checkpointing = True
+        self.paligemma_with_expert.paligemma.model.vision_tower.gradient_checkpointing = True
+        self.paligemma_with_expert.gemma_expert.model.gradient_checkpointing = True
+        logging.info("Enabled gradient checkpointing for PI05Pytorch model")
+
+    def gradient_checkpointing_disable(self):
+        """Disable gradient checkpointing."""
+        self.gradient_checkpointing_enabled = False
+        self.paligemma_with_expert.paligemma.model.language_model.gradient_checkpointing = False
+        self.paligemma_with_expert.paligemma.model.vision_tower.gradient_checkpointing = False
+        self.paligemma_with_expert.gemma_expert.model.gradient_checkpointing = False
+        logging.info("Disabled gradient checkpointing for PI05Pytorch model")
+
+    def _rtc_enabled(self):
+        return self.config.rtc_config is not None and self.config.rtc_config.enabled
+
+    def _apply_checkpoint(self, func, *args, **kwargs):
+        """Helper method to apply gradient checkpointing if enabled."""
+        if self.gradient_checkpointing_enabled and self.training:
+            return torch.utils.checkpoint.checkpoint(
+                func, *args, use_reentrant=False, preserve_rng_state=False, **kwargs
+            )
+        return func(*args, **kwargs)
+
+    def _prepare_attention_masks_4d(self, att_2d_masks, dtype=None):
+        """Helper method to prepare 4D attention masks for transformer."""
+        att_2d_masks_4d = att_2d_masks[:, None, :, :]
+        result = torch.where(att_2d_masks_4d, 0.0, OPENPI_ATTENTION_MASK_VALUE)
+        if dtype is not None:
+            result = result.to(dtype=dtype)
+        return result
+
+    def sample_noise(self, shape, device):
+        return torch.normal(
+            mean=0.0,
+            std=1.0,
+            size=shape,
+            dtype=torch.float32,
+            device=device,
+        )
+
+    def sample_time(self, bsize, device):
+        time_beta = sample_beta(
+            self.config.time_sampling_beta_alpha, self.config.time_sampling_beta_beta, bsize, device
+        )
+        time = time_beta * self.config.time_sampling_scale + self.config.time_sampling_offset
+        return time.to(dtype=torch.float32, device=device)
+
+    def _create_custom_attention_mask(self, att_mask_segments, pad_masks, bsize):
+        """Create custom 2D attention mask for the new attention pattern.
+
+        Attention rules:
+        - Images + Language: bidirectional among themselves, don't attend to subtask or FAST
+        - Subtask: attend to images + language, causal among themselves, don't attend to FAST
+        - FAST: attend to images + language + subtask, causal among themselves
+
+        Args:
+            att_mask_segments: List of (type, length) tuples
+            pad_masks: Padding masks [B, total_seq_len]
+            bsize: Batch size
+
+        Returns:
+            att_2d_masks: 2D attention mask [B, total_seq_len, total_seq_len]
+        """
+        total_len = sum(length for _, length in att_mask_segments)
+        device = pad_masks.device
+
+        # start initializing attention mask as False (cannot attend)
+        att_2d_masks = torch.zeros(bsize, total_len, total_len, dtype=torch.bool, device=device)
+
+        # track positions for each segment
+        positions = []
+        current_pos = 0
+        for seg_type, seg_len in att_mask_segments:
+            positions.append((seg_type, current_pos, current_pos + seg_len))
+            current_pos += seg_len
+
+        # apply attention rules
+        for i, (query_type, query_start, query_end) in enumerate(positions):
+            for j, (key_type, key_start, key_end) in enumerate(positions):
+                # Images and Language can attend to each other bidirectionally
+                if query_type in ['image', 'language'] and key_type in ['image', 'language']:
+                    att_2d_masks[:, query_start:query_end, key_start:key_end] = True
+
+                # Subtask tokens attend to images + language
+                elif query_type == 'subtask' and key_type in ['image', 'language']:
+                    att_2d_masks[:, query_start:query_end, key_start:key_end] = True
+
+                # Subtask tokens attend causally to themselves
+                elif query_type == 'subtask' and key_type == 'subtask':
+                    # create causal mask for subtask tokens
+                    subtask_len = query_end - query_start
+                    causal_mask = torch.tril(torch.ones(subtask_len, subtask_len, dtype=torch.bool, device=device))
+                    att_2d_masks[:, query_start:query_end, key_start:key_end] = causal_mask[None, :, :]
+
+                # FAST tokens attend to images + language + subtask
+                elif query_type == 'fast' and key_type in ['image', 'language', 'subtask']:
+                    att_2d_masks[:, query_start:query_end, key_start:key_end] = True
+
+                # FAST tokens attend causally to themselves
+                elif query_type == 'fast' and key_type == 'fast':
+                    fast_len = query_end - query_start
+                    causal_mask = torch.tril(torch.ones(fast_len, fast_len, dtype=torch.bool, device=device))
+                    att_2d_masks[:, query_start:query_end, key_start:key_end] = causal_mask[None, :, :]
+
+        # apply padding masks
+        pad_2d_masks = pad_masks[:, None, :] * pad_masks[:, :, None]
+        att_2d_masks = att_2d_masks & pad_2d_masks
+
+        return att_2d_masks
+
+    def embed_prefix(
+            self,
+            images,
+            img_masks,
+            tokens,
+            subtask_tokens,
+            masks,
+            subtask_masks,
+            fast_action_tokens=None,
+            fast_action_masks=None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, int, int]:
+        """Embed images with SigLIP, tokens, and optionally subtask tokens with embedding layer.
+
+        Args:
+            images: List of image tensors
+            img_masks: List of image masks
+            tokens: Language instruction tokens
+            subtask_tokens: Subtask tokens to predict (can be None for inference)
+            masks: Attention masks for tokens
+            fast_action_tokens: FAST action tokens for auxiliary prediction (can be None) - discrete token IDs
+            fast_action_masks: Padding masks for FAST action tokens (can be None)
+
+        Returns:
+            embs: Concatenated embeddings [images, tokens, (subtask_tokens if provided), (fast_action_tokens if provided)]
+            pad_masks: Padding masks
+            att_masks: Custom 2D attention mask implementing the required pattern
+            total_T_images: Total number of image tokens
+            num_subtask_embs: Number of subtask token embeddings
+            num_fast_embs: Number of FAST action token embeddings
+        """
+        embs = []
+        pad_masks = []
+        att_mask_segments = []  # Store info about each segment for custom mask creation
+        image_len = 0
+        language_len = 0
+        subtask_len = 0
+        fast_len = 0
+
+        # Process images
+        for img, img_mask in zip(images, img_masks, strict=True):
+            def image_embed_func(img):
+                return self.paligemma_with_expert.embed_image(img)
+
+            img_emb = self._apply_checkpoint(image_embed_func, img)
+            bsize, num_img_embs = img_emb.shape[:2]
+
+            embs.append(img_emb)
+            pad_masks.append(img_mask[:, None].expand(bsize, num_img_embs))
+            att_mask_segments.append(('image', num_img_embs))
+            image_len += num_img_embs
+
+        # Process language instruction tokens
+        def lang_embed_func(tokens):
+            lang_emb = self.paligemma_with_expert.embed_language_tokens(tokens)
+            lang_emb_dim = lang_emb.shape[-1]
+            return lang_emb * math.sqrt(lang_emb_dim)
+
+        lang_emb = self._apply_checkpoint(lang_embed_func, tokens)
+        embs.append(lang_emb)
+        pad_masks.append(masks)
+
+        num_lang_embs = lang_emb.shape[1]
+        att_mask_segments.append(('language', num_lang_embs))
+
+        # process subtask tokens (these are predicted, so use causal masking)
+        if subtask_tokens is not None:
+            def subtask_embed_func(subtask_tokens):
+                subtask_emb = self.paligemma_with_expert.embed_language_tokens(subtask_tokens)
+                subtask_emb_dim = subtask_emb.shape[-1]
+                return subtask_emb * math.sqrt(subtask_emb_dim)
+
+            subtask_emb = self._apply_checkpoint(subtask_embed_func, subtask_tokens)
+            embs.append(subtask_emb)
+
+            # create subtask pad masks (non-zero tokens are valid)
+            pad_masks.append(subtask_masks)
+
+            subtask_len = subtask_emb.shape[1]
+            att_mask_segments.append(('subtask', subtask_len))
+
+        # Process FAST action tokens (discrete token IDs)
+        if fast_action_tokens is not None:
+            def fast_action_embed_func(fast_action_tokens):
+                fast_emb = self.paligemma_with_expert.embed_language_tokens(fast_action_tokens)
+                fast_emb_dim = fast_emb.shape[-1]
+                return fast_emb * math.sqrt(fast_emb_dim)
+
+            fast_action_emb = self._apply_checkpoint(fast_action_embed_func, fast_action_tokens)
+            embs.append(fast_action_emb)
+
+            fast_len = fast_action_tokens.shape[1]
+            pad_masks.append(fast_action_masks)
+            att_mask_segments.append(("fast", fast_len))
+
+        embs = torch.cat(embs, dim=1)
+        pad_masks = torch.cat(pad_masks, dim=1)
+
+        # create custom 2D attention mask
+        # Attention rules:
+        # - Images + Language: bidirectional among themselves, don't attend to subtask or FAST
+        # - Subtask: attend to images + language, causal among themselves, don't attend to FAST
+        # - FAST: attend to images + language + subtask, causal among themselves
+        att_masks = self._create_custom_attention_mask(att_mask_segments, pad_masks, bsize)
+
+        # # Optionally visualize the attention mask
+        # self.visualize_attention_mask(
+        #     att_mask_segments=att_mask_segments,
+        #     att_2d_masks=att_masks,
+        #     save_path="/admin/home/jade_choghari/lerobot/src/lerobot/policies/pi05/attention_mask_visualization.png",
+        #     batch_idx=0,
+        #     max_display_tokens=512  # Limit display for very long sequences
+        # )
+
+        return embs, pad_masks, att_masks, image_len
+
+    def embed_suffix(self, noisy_actions, timestep):
+        """Embed noisy_actions, timestep to prepare for Expert Gemma processing."""
+        noisy_actions = noisy_actions.to(dtype=self.action_in_proj.weight.dtype)
+        embs = []
+        pad_masks = []
+        att_masks = []
+
+        # Embed timestep using sine-cosine positional encoding
+        time_emb = create_sinusoidal_pos_embedding(
+            timestep,
+            self.action_in_proj.out_features,
+            min_period=self.config.min_period,
+            max_period=self.config.max_period,
+            device=timestep.device,
+        )
+        time_emb = time_emb.to(dtype=self.action_in_proj.weight.dtype)
+
+        # Fuse timestep + action information using an MLP
+        def action_proj_func(noisy_actions):
+            return self.action_in_proj(noisy_actions)
+
+        action_emb = self._apply_checkpoint(action_proj_func, noisy_actions)
+
+        def time_mlp_func(time_emb):
+            x = self.time_mlp_in(time_emb)
+            x = F.silu(x)
+            x = self.time_mlp_out(x)
+            return F.silu(x)
+
+        time_emb = self._apply_checkpoint(time_mlp_func, time_emb)
+        action_time_emb = action_emb
+        adarms_cond = time_emb
+
+        embs.append(action_time_emb)
+        bsize, action_time_dim = action_time_emb.shape[:2]
+        action_time_mask = torch.ones(bsize, action_time_dim, dtype=torch.bool, device=timestep.device)
+        pad_masks.append(action_time_mask)
+
+        # Set attention masks so that image, language and state inputs do not attend to action tokens
+        att_masks += [1] + ([0] * (self.config.chunk_size - 1))
+
+        embs = torch.cat(embs, dim=1)
+        pad_masks = torch.cat(pad_masks, dim=1)
+        att_masks = torch.tensor(att_masks, dtype=embs.dtype, device=embs.device)
+        att_masks = att_masks[None, :].expand(bsize, len(att_masks))
+
+        return embs, pad_masks, att_masks, adarms_cond
+
+    def forward(self, images, img_masks, high_level_task_tokens, high_level_task_masks, subtask_tokens, subtask_masks,
+                action_tokens, action_masks, actions, noise=None, time=None) -> Tensor:
+        """Do a full training forward pass and compute the loss."""
+        if noise is None:
+            noise = self.sample_noise(actions.shape, actions.device)
+
+        if time is None:
+            time = self.sample_time(actions.shape[0], actions.device)
+
+        time_expanded = time[:, None, None]
+        x_t = time_expanded * noise + (1 - time_expanded) * actions
+        u_t = noise - actions
+
+        prefix_embs, prefix_pad_masks, prefix_att_masks, image_len = self.embed_prefix(images, img_masks,
+                                                                                       high_level_task_tokens,
+                                                                                       subtask_tokens,
+                                                                                       high_level_task_masks,
+                                                                                       subtask_masks, action_tokens,
+                                                                                       action_masks)
+        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(x_t, time)
+
+        # TODO jadechoghari
+        # this attention part should be reworked
+        suffix_att_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
+        # prefix_att_masks: shape [B, prefix_len, prefix_len]
+        # suffix_att_masks: shape [B, suffix_len, suffix_len]
+        # get: image_len, language_len, subtask_len, fast_len
+        language_len = high_level_task_tokens.shape[1]
+        subtask_len = subtask_tokens.shape[1]
+        fast_len = action_tokens.shape[1]
+
+        # create the correct attention mask for combining the prefix and suffix
+        # suffix embeddings from the action expert embeddings attend
+        # to the prefix and to one another, but do not attend to FAST action tokens
+        # final shape: [B, prefix_len+suffix_len, prefix_len+suffix_len]
+        # TODO: jadechoghari: put it in a function, and be more efficient
+        bsize = prefix_embs.shape[0]
+        prefix_len = prefix_pad_masks.shape[1]
+        suffix_len = suffix_pad_masks.shape[1]
+        total_len = prefix_len + suffix_len
+
+        # start with 0 mask
+        combined_att_2d_masks = torch.zeros(bsize, total_len, total_len, dtype=torch.bool, device=prefix_embs.device)
+
+        # top-left: prefix attends to prefix (using the custom prefix attention mask)
+        combined_att_2d_masks[:, :prefix_len, :prefix_len] = prefix_att_masks
+
+        # bottom-right: suffix attends to suffix (using suffix attention mask)
+        combined_att_2d_masks[:, prefix_len:, prefix_len:] = suffix_att_masks
+
+        # bottom-left: suffix attends to prefix EXCEPT FAST tokens
+        # calculate where FAST tokens are in the prefix
+        prefix_without_fast_len = image_len + language_len + subtask_len
+
+        # suffix can attend to images, language, and subtask tokens (but not FAST)
+        combined_att_2d_masks[:, prefix_len:, :prefix_without_fast_len] = True
+
+        # apply padding masks to the combined attention mask
+        combined_pad_masks = torch.cat([prefix_pad_masks, suffix_pad_masks], dim=1)
+        pad_2d_masks = combined_pad_masks[:, None, :] * combined_pad_masks[:, :, None]
+        att_2d_masks = combined_att_2d_masks & pad_2d_masks
+
+        if (
+                self.paligemma_with_expert.paligemma.language_model.layers[0].self_attn.q_proj.weight.dtype
+                == torch.bfloat16
+        ):
+            suffix_embs = suffix_embs.to(dtype=torch.bfloat16)
+            prefix_embs = prefix_embs.to(dtype=torch.bfloat16)
+        position_ids = torch.cumsum(combined_pad_masks, dim=1) - 1
+
+        att_2d_masks_4d = self._prepare_attention_masks_4d(att_2d_masks)
+
+        def forward_func(prefix_embs, suffix_embs, att_2d_masks_4d, position_ids, adarms_cond):
+            (prefix_out, suffix_out), _ = self.paligemma_with_expert.forward(
+                attention_mask=att_2d_masks_4d,
+                position_ids=position_ids,
+                past_key_values=None,
+                inputs_embeds=[prefix_embs, suffix_embs],
+                use_cache=False,
+                adarms_cond=[None, adarms_cond],
+            )
+            return prefix_out, suffix_out
+
+        # TODO: jadechoghri
+        # add subtask prediction loss
+        # add fast action prediction loss
+        prefix_out, suffix_out = self._apply_checkpoint(
+            forward_func, prefix_embs, suffix_embs, att_2d_masks_4d, position_ids, adarms_cond
+        )
+
+        # add fast action prediction loss
+        # Get logits for FAST action tokens using the FAST LM head
+        # only compute logits for the positions that predict FAST tokens
+        lm_head = self.paligemma_with_expert.paligemma.lm_head
+
+        # Targets are the FAST action tokens
+        fast_targets = action_tokens  # (B, num_fast_embs)
+
+        # extract logits for FAST token prediction
+        fast_hidden = prefix_out[:, -fast_targets.shape[1]:, :]
+        fast_logits_for_pred = lm_head(fast_hidden)  # (B, num_fast_embs, gemma_vocab_size)
+
+        # Shift left for next-step prediction and shift target
+        # logits[:, i] predicts targets[:, i+1]
+        fast_logits_for_pred = fast_logits_for_pred[:, :-1, :]  # shift logits left
+        fast_targets = fast_targets[:, 1:]  # shift targets right
+        fast_action_masks = action_masks[:, 1:]  # shift masks to match targets
+
+        # compute cross-entropy loss
+        loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
+        fast_logits_flat = fast_logits_for_pred.reshape(-1, fast_logits_for_pred.size(-1))
+        fast_targets_flat = fast_targets.reshape(-1)
+
+        fast_loss_per_token = loss_fct(fast_logits_flat, fast_targets_flat)
+        fast_loss_per_token = fast_loss_per_token.reshape(fast_targets.shape)
+
+        # apply mask and compute mean loss
+        masked_fast_loss = fast_loss_per_token * fast_action_masks.float()
+        fast_loss = masked_fast_loss.sum() / fast_action_masks.sum().clamp(min=1)
+
+        # add subtask prediction loss
+        subtask_targets = subtask_tokens
+
+        # extract logits for subtask token prediction
+        subtask_hidden = prefix_out[:, -(fast_len + subtask_len):-fast_len, :]
+        subtask_logits_for_pred = lm_head(subtask_hidden)  # (B, num_subtask_embs, gemma_vocab_size)
+
+        # Shift left for next-step prediction and shift target
+        # logits[:, i] predicts targets[:, i+1]
+        subtask_logits_for_pred = subtask_logits_for_pred[:, :-1, :]  # shift logits left
+        subtask_targets = subtask_targets[:, 1:]  # shift targets right
+        subtask_masks_shifted = subtask_masks[:, 1:]  # shift masks to match targets
+
+        # compute cross-entropy loss
+        logits_flat = subtask_logits_for_pred.reshape(-1, subtask_logits_for_pred.size(-1))
+        targets_flat = subtask_targets.reshape(-1)
+        subtask_loss_per_token = loss_fct(logits_flat, targets_flat)
+        subtask_loss_per_token = subtask_loss_per_token.reshape(subtask_targets.shape)
+
+        # apply mask and compute mean loss
+        masked_subtask_loss = subtask_loss_per_token * subtask_masks_shifted.float()
+        subtask_loss = masked_subtask_loss.sum() / subtask_masks_shifted.sum().clamp(min=1)
+
+        suffix_out = suffix_out[:, -self.config.chunk_size:]
+        suffix_out = suffix_out.to(dtype=torch.float32)
+
+        def action_out_proj_func(suffix_out):
+            return self.action_out_proj(suffix_out)
+
+        v_t = self._apply_checkpoint(action_out_proj_func, suffix_out)
+        flow_loss = F.mse_loss(u_t, v_t, reduction="none")
+
+        # Compute weighted total loss
+        flow_loss_mean = flow_loss.mean()
+        action_ce_loss_mean = fast_loss.mean()
+        subtask_ce_loss_mean = subtask_loss.mean()
+
+        total_loss = (
+                self.config.loss_weight_flow * flow_loss_mean
+                + self.config.loss_weight_action_ce * action_ce_loss_mean
+                + self.config.loss_weight_subtask_ce * subtask_ce_loss_mean
+        )
+
+        return {
+            "flow_mse_loss": flow_loss_mean,
+            "action_ce_loss": action_ce_loss_mean,
+            "subtask_ce_loss": subtask_ce_loss_mean,
+            "loss": total_loss,
+        }
+
+    @torch.no_grad()  # see openpi `sample_actions` (slightly adapted)
+    def sample_actions(
+            self,
+            images,
+            img_masks,
+            high_level_task_tokens,
+            high_level_task_masks,
+            subtask_tokens,
+            subtask_masks,
+            noise=None,
+            num_steps=None,
+            **kwargs: Unpack[ActionSelectKwargs],
+    ) -> Tensor:
+        """Do a full inference forward and compute the action."""
+        if num_steps is None:
+            num_steps = self.config.num_inference_steps
+
+        bsize = high_level_task_tokens.shape[0]
+        device = high_level_task_tokens.device
+
+        if noise is None:
+            # Sample noise with padded dimension as expected by action_in_proj
+            actions_shape = (
+                bsize,
+                self.config.chunk_size,
+                self.config.max_action_dim,
+            )  # Use config max_action_dim for internal processing
+            noise = self.sample_noise(actions_shape, device)
+
+        # Ensure noise matches model dtype
+        if (
+                self.paligemma_with_expert.paligemma.language_model.layers[0].self_attn.q_proj.weight.dtype
+                == torch.bfloat16
+        ):
+            noise = noise.to(dtype=torch.bfloat16)
+
+        prefix_embs, prefix_pad_masks, prefix_att_masks, _ = self.embed_prefix(
+            images=images, img_masks=img_masks, tokens=high_level_task_tokens, subtask_tokens=subtask_tokens,
+            masks=high_level_task_masks, subtask_masks=subtask_masks, fast_action_tokens=None, fast_action_masks=None
+        )
+
+        # Ensure prefix_embs matches model dtype
+        if (
+                self.paligemma_with_expert.paligemma.language_model.layers[0].self_attn.q_proj.weight.dtype
+                == torch.bfloat16
+        ):
+            prefix_embs = prefix_embs.to(dtype=torch.bfloat16)
+
+        # prefix_att_masks is already a 2D attention mask from _create_custom_attention_mask
+        prefix_att_2d_masks = prefix_att_masks
+        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+
+        prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks, dtype=prefix_embs.dtype)
+        self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "sdpa"  # noqa: SLF001
+
+        _, past_key_values = self.paligemma_with_expert.forward(
+            attention_mask=prefix_att_2d_masks_4d,
+            position_ids=prefix_position_ids,
+            past_key_values=None,
+            inputs_embeds=[prefix_embs, None],
+            use_cache=True,
+        )
+
+        dt = -1.0 / num_steps
+
+        x_t = noise
+        for step in range(num_steps):
+            time = 1.0 + step * dt
+            time_tensor = torch.tensor(time, dtype=torch.float32, device=device).expand(bsize)
+
+            # Ensure time_tensor matches model dtype
+            if (
+                    self.paligemma_with_expert.paligemma.language_model.layers[0].self_attn.q_proj.weight.dtype
+                    == torch.bfloat16
+            ):
+                time_tensor = time_tensor.to(dtype=torch.bfloat16)
+
+            def denoise_step_partial_call(input_x_t, current_timestep=time_tensor):
+                return self.denoise_step(
+                    prefix_pad_masks=prefix_pad_masks,
+                    past_key_values=past_key_values,
+                    x_t=input_x_t,
+                    timestep=current_timestep,
+                )
+
+            if self._rtc_enabled():
+                inference_delay = kwargs.get("inference_delay")
+                prev_chunk_left_over = kwargs.get("prev_chunk_left_over")
+                execution_horizon = kwargs.get("execution_horizon")
+
+                v_t = self.rtc_processor.denoise_step(
+                    x_t=x_t,
+                    prev_chunk_left_over=prev_chunk_left_over,
+                    inference_delay=inference_delay,
+                    time=time,
+                    original_denoise_step_partial=denoise_step_partial_call,
+                    execution_horizon=execution_horizon,
+                )
+            else:
+                v_t = denoise_step_partial_call(x_t)
+
+            x_t = x_t + dt * v_t
+
+            if self.rtc_processor is not None and self.rtc_processor.is_debug_enabled():
+                self.rtc_processor.track(time=time, x_t=x_t, v_t=v_t)
+
+        return x_t
+
+    @torch.no_grad()
+    def generate_subtask_tokens(
+            self,
+            images,
+            img_masks,
+            tokens,
+            masks,
+            max_decoding_steps=None,
+            temperature=0.0,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Generate subtask tokens given environment observations (uses KV cache).
+
+        Returns:
+            tuple: (generated_subtask_tokens, generated_subtask_masks)
+                - generated_subtask_tokens: (B, max_decoding_steps) token IDs
+                - generated_subtask_masks: (B, max_decoding_steps) bool mask (True for valid tokens, False for padding)
+        """
+        if max_decoding_steps is None:
+            max_decoding_steps = self.config.max_decoding_steps
+
+        bsize = tokens.shape[0]
+        device = tokens.device
+
+        lm_head = self.paligemma_with_expert.paligemma.lm_head
+
+        # 1. prefill phase
+        # Process Images + Text Prompt + BOS token once to populate the KV cache.
+
+        # Seed subtask generation with BOS in the subtask segment (matches training attention structure)
+        bos_token = torch.full(
+            (bsize, 1), self._paligemma_tokenizer.bos_token_id, dtype=torch.long, device=device
+        )
+        bos_mask = torch.ones((bsize, 1), dtype=torch.bool, device=device)
+
+        # Embed prefix [Images, Language | BOS] — BOS in subtask segment, not language segment
+        prefix_embs, prefix_pad_masks, prefix_att_masks, _ = self.embed_prefix(
+            images=images, img_masks=img_masks, tokens=tokens, subtask_tokens=bos_token,
+            masks=masks, subtask_masks=bos_mask, fast_action_tokens=None, fast_action_masks=None
+        )
+
+        # Ensure correct precision (bfloat16/float32)
+        if (
+                self.paligemma_with_expert.paligemma.language_model.layers[0].self_attn.q_proj.weight.dtype
+                == torch.bfloat16
+        ):
+            prefix_embs = prefix_embs.to(dtype=torch.bfloat16)
+
+        # Create position IDs (cumsum of mask - 1)
+        position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+
+        # Create 4D mask for the prefix
+        att_4d = self._prepare_attention_masks_4d(prefix_att_masks, dtype=prefix_embs.dtype)
+
+        # Forward pass (Prefill) with use_cache=True
+        # We only pass [prefix_embs, None] because we aren't using the suffix (expert) model yet
+        (prefix_out, _), past_key_values = self.paligemma_with_expert.forward(
+            attention_mask=att_4d,
+            position_ids=position_ids,
+            past_key_values=None,
+            inputs_embeds=[prefix_embs, None],
+            use_cache=True,  # Enable caching
+            adarms_cond=[None, None],
+        )
+
+        # Sample the first action token from the last logit of the prefix
+        last_logits = lm_head(prefix_out[:, -1:, :])  # (B, 1, V)
+        # Suppress all PaLiGemma special tokens (<loc0000>-<loc1023>, <seg>, etc.) so the model
+        # cannot generate visual-grounding or FAST action tokens during subtask text decoding.
+        # These special tokens all start at ID 256000 (the base Gemma vocab boundary).
+        # FAST token IDs are a subset of these (the upper <loc> range), but the model also
+        # generates lower <loc> tokens, so we mask the entire special-token region.
+        loc0_id = self._paligemma_tokenizer.convert_tokens_to_ids("<loc0000>")
+        last_logits[:, -1, loc0_id:] = float("-inf")
+        if temperature > 0:
+            probs = torch.softmax(last_logits[:, -1] / temperature, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+        else:
+            next_token = torch.argmax(last_logits[:, -1], dim=-1, keepdim=True)
+
+        # Initialize storage for generated tokens and masks
+        generated_subtask_tokens = torch.zeros((bsize, max_decoding_steps), dtype=torch.long, device=device)
+        generated_subtask_masks = torch.zeros((bsize, max_decoding_steps), dtype=torch.bool, device=device)
+        generated_subtask_tokens[:, 0] = next_token.squeeze(-1)
+        generated_subtask_masks[:, 0] = True  # First token is always valid
+
+        # Track which sequences have finished (generated EOS)
+        finished = torch.zeros(bsize, dtype=torch.bool, device=device)
+        eos_token_id = self._paligemma_tokenizer.eos_token_id
+        finished = finished | (next_token.squeeze(-1) == eos_token_id)
+
+        # Track valid tokens mask (0 for pad, 1 for valid)
+        # We need this to tell the new token what it can attend to (images + text + past actions)
+        current_pad_mask = prefix_pad_masks
+
+        # 2. decoding phase
+        # Generate remaining tokens one by one using the cache.
+        for t in range(1, max_decoding_steps):
+            # Embed the single previous token
+            # We use embed_language_tokens directly to avoid overhead of full prefix embedding
+            next_token_emb = self.paligemma_with_expert.embed_language_tokens(next_token)
+            next_token_emb = next_token_emb * math.sqrt(next_token_emb.shape[-1])
+            if prefix_embs.dtype == torch.bfloat16:
+                next_token_emb = next_token_emb.to(dtype=torch.bfloat16)
+
+            # Update Pad Mask: append 1s for the new valid token
+            new_column = torch.ones((bsize, 1), dtype=torch.bool, device=device)
+            current_pad_mask = torch.cat([current_pad_mask, new_column], dim=1)
+
+            # Update Position IDs for the single new token
+            current_position_ids = (torch.sum(current_pad_mask, dim=1, keepdim=True) - 1).long()
+
+            # Create Attention Mask for the single new step
+            # The new token attends to all valid tokens in history (captured by current_pad_mask).
+            # Shape becomes (B, 1, 1, Total_Len) which works with HF's cache logic.
+            step_att_mask = self._prepare_attention_masks_4d(
+                current_pad_mask.unsqueeze(1), dtype=next_token_emb.dtype
+            )
+
+            # Forward pass (Decoding step)
+            # input_embeds is just the new token (B, 1, D)
+            (step_out, _), past_key_values = self.paligemma_with_expert.forward(
+                attention_mask=step_att_mask,
+                position_ids=current_position_ids,
+                past_key_values=past_key_values,  # Pass updated cache
+                inputs_embeds=[next_token_emb, None],
+                use_cache=True,
+                adarms_cond=[None, None],
+            )
+
+            # Sample next token
+            last_logits = lm_head(step_out[:, -1:, :])
+            # Suppress all PaLiGemma special tokens (same masking as the prefill step above)
+            last_logits[:, -1, loc0_id:] = float("-inf")
+            if temperature > 0:
+                probs = torch.softmax(last_logits[:, -1] / temperature, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+            else:
+                next_token = torch.argmax(last_logits[:, -1], dim=-1, keepdim=True)
+
+            # Force pad token (0) for sequences that have already finished
+            next_token = torch.where(finished.unsqueeze(-1), torch.tensor(0, device=device), next_token)
+
+            generated_subtask_tokens[:, t] = next_token.squeeze(-1)
+            # Mark as valid only if the sequence hasn't finished yet
+            generated_subtask_masks[:, t] = ~finished
+
+            # Update finished mask for newly finished sequences
+            finished = finished | (next_token.squeeze(-1) == eos_token_id)
+
+            if finished.all():
+                break
+
+        # pad rest only if shape less than max_decoding_steps, we should always return a shape of (bsize, max_decoding_steps)
+        if generated_subtask_tokens.shape[1] < max_decoding_steps:
+            generated_subtask_tokens = torch.cat([generated_subtask_tokens, torch.zeros(
+                (bsize, max_decoding_steps - generated_subtask_tokens.shape[1]), dtype=torch.long, device=device)],
+                                                 dim=1)
+            generated_subtask_masks = torch.cat([generated_subtask_masks, torch.zeros(
+                (bsize, max_decoding_steps - generated_subtask_masks.shape[1]), dtype=torch.bool, device=device)],
+                                                dim=1)
+
+        # Prepend BOS to match training format: TokenizerProcessorStep uses add_bos_token=True (Gemma default),
+        # so training subtask_tokens = [BOS, 'Sub', 'task', ...]. generate_subtask_tokens seeds with BOS but
+        # stores only the predicted tokens after it, causing a 1-position RoPE shift in sample_actions.
+        # Fix: prepend BOS and drop the last (padding) slot to keep length = max_decoding_steps.
+        bos_col = torch.full((bsize, 1), self._paligemma_tokenizer.bos_token_id, dtype=torch.long, device=device)
+        bos_mask_col = torch.ones((bsize, 1), dtype=torch.bool, device=device)
+        generated_subtask_tokens = torch.cat([bos_col, generated_subtask_tokens[:, :-1]], dim=1)
+        generated_subtask_masks = torch.cat([bos_mask_col, generated_subtask_masks[:, :-1]], dim=1)
+
+        return generated_subtask_tokens, generated_subtask_masks
+
+    def decode_subtask_text(self, tokens: torch.Tensor, masks: torch.Tensor | None = None) -> str:
+        """Decode a self-generated subtask token row (batch item 0) back to text.
+
+        Mirrors the trimming used by the deployment status view: keep only the
+        masked-valid tokens, stop at the first EOS, and cut at the ``;`` / newline
+        separators the subtask prompt uses (belt-and-braces in case the finetuned model
+        has not fully learned the EOS convention). Used for logging / display only.
+        """
+        tokenizer = self._paligemma_tokenizer
+        eos_id = tokenizer.eos_token_id
+        ids = tokens[0]
+        if masks is not None:
+            ids = ids[masks[0].bool()]
+        ids = ids.tolist()
+        if eos_id in ids:
+            ids = ids[: ids.index(eos_id)]
+        text = tokenizer.decode(ids, skip_special_tokens=True).strip()
+        for sep in (";", "\n"):
+            if sep in text:
+                text = text.split(sep)[0].strip()
+        return text
+
+    def denoise_step(
+            self,
+            prefix_pad_masks,
+            past_key_values,
+            x_t,
+            timestep,
+    ):
+        """Apply one denoising step of the noise `x_t` at a given timestep."""
+        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(x_t, timestep)
+
+        # embed_suffix emits float32 (action_in_proj is float32), but the Gemma action
+        # expert runs in bfloat16, so PiGemmaModel.forward casts the hidden state to
+        # bfloat16 internally. Cast suffix_embs here too so the 4D attention mask built
+        # below (from suffix_embs.dtype) matches the query dtype — otherwise SDPA raises
+        # "invalid dtype for bias - should match query's dtype". Mirrors how sample_actions
+        # casts prefix_embs and how the PI0 baseline casts suffix_embs to the backbone dtype.
+        if (
+                self.paligemma_with_expert.gemma_expert.model.layers[0].self_attn.q_proj.weight.dtype
+                == torch.bfloat16
+        ):
+            suffix_embs = suffix_embs.to(dtype=torch.bfloat16)
+
+        suffix_len = suffix_pad_masks.shape[1]
+        batch_size = prefix_pad_masks.shape[0]
+        prefix_len = prefix_pad_masks.shape[1]
+
+        prefix_pad_2d_masks = prefix_pad_masks[:, None, :].expand(batch_size, suffix_len, prefix_len)
+        suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
+        full_att_2d_masks = torch.cat([prefix_pad_2d_masks, suffix_att_2d_masks], dim=2)
+
+        prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
+        position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
+
+        full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks, dtype=suffix_embs.dtype)
+        self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "sdpa"  # noqa: SLF001
+
+        # HF attention layers append new K/V to a Cache object even when use_cache=False,
+        # so the prefill cache would grow by suffix_len each denoise iteration. Snapshot
+        # the prefix length and crop back after the forward to keep the cache stable.
+        prefix_cache_len = past_key_values.get_seq_length()
+        outputs_embeds, _ = self.paligemma_with_expert.forward(
+            attention_mask=full_att_2d_masks_4d,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=[None, suffix_embs],
+            use_cache=False,
+            adarms_cond=[None, adarms_cond],
+        )
+
+        past_key_values.crop(prefix_cache_len)
+
+        suffix_out = outputs_embeds[1]
+        suffix_out = suffix_out[:, -self.config.chunk_size:]
+        suffix_out = suffix_out.to(dtype=self.action_out_proj.weight.dtype)
+        return self.action_out_proj(suffix_out)
+
+
+class PI05FullPolicy(PreTrainedPolicy):
+    """PI05 Policy for LeRobot."""
+
+    config_class = PI05FullConfig
+    name = "pi05_full"
+
+    def __init__(
+            self,
+            config: PI05FullConfig,
+            **kwargs,
+    ):
+        """
+        Args:
+            config: Policy configuration class instance.
+        """
+        super().__init__(config)
+        config.validate_features()
+        self.config = config
+
+        # Initialize the core PI05 model
+        self.init_rtc_processor()
+        self.model = PI05Pytorch(config, rtc_processor=self.rtc_processor)
+
+        # Enable gradient checkpointing if requested
+        if config.gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
+
+        self.model.to(config.device)
+
+        self.reset()
+
+    @staticmethod
+    def _tie_or_copy_language_embeddings(paligemma) -> bool:
+        """
+        Ties the language model's input embeddings to the lm_head output embeddings.
+
+        This is needed because the PI05 checkpoint only stores lm_head.weight and expects
+        consumers to tie it to embed_tokens.weight locally.
+
+        Args:
+            paligemma: The paligemma model instance
+
+        Returns:
+            bool: True if tying succeeded and weights share memory, False otherwise
+        """
+        if paligemma is None:
+            return False
+
+        language_model = getattr(getattr(paligemma, "model", None), "language_model", None)
+        lm_head = getattr(paligemma, "lm_head", None)
+
+        if language_model is None or lm_head is None:
+            return False
+
+        embed_tokens = getattr(language_model, "embed_tokens", None)
+        lm_head_weight = getattr(lm_head, "weight", None)
+
+        if embed_tokens is None or lm_head_weight is None:
+            return False
+
+        embed_weight = getattr(embed_tokens, "weight", None)
+        if embed_weight is None or embed_weight.shape != lm_head_weight.shape:
+            return False
+
+        # Bind the same Parameter object so embed_tokens.weight IS lm_head.weight.
+        # tie_weights() can't re-share storage in this construction path (WithPiGemma
+        # rebuilds .model after super().__init__() ties; later dtype conversions
+        # rewrite .data on individual params). Direct assignment is what HF does
+        # internally and survives later .data mutations.
+        language_model.embed_tokens.weight = lm_head.weight
+        return language_model.embed_tokens.weight is lm_head.weight
+
+    @classmethod
+    def from_pretrained(
+            cls: builtins.type[T],
+            pretrained_name_or_path: str | Path,
+            *,
+            config: PreTrainedConfig | None = None,
+            force_download: bool = False,
+            resume_download: bool | None = None,
+            proxies: dict | None = None,
+            token: str | bool | None = None,
+            cache_dir: str | Path | None = None,
+            local_files_only: bool = False,
+            revision: str | None = None,
+            strict: bool = True,
+            **kwargs,
+    ) -> T:
+        """Override the from_pretrained method to handle key remapping and display important disclaimer."""
+        print(
+            "The PI05 model is a direct port of the OpenPI implementation. \n"
+            "This implementation follows the original OpenPI structure for compatibility. \n"
+            "Original implementation: https://github.com/Physical-Intelligence/openpi"
+        )
+        if pretrained_name_or_path is None:
+            raise ValueError("pretrained_name_or_path is required")
+
+        # Use provided config if available, otherwise create default config
+        if config is None:
+            config = PreTrainedConfig.from_pretrained(
+                pretrained_name_or_path=pretrained_name_or_path,
+                force_download=force_download,
+                resume_download=resume_download,
+                proxies=proxies,
+                token=token,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+                revision=revision,
+                **kwargs,
+            )
+
+        from transformers.modeling_utils import no_init_weights
+        with no_init_weights():
+            model = cls(config, **kwargs)
+        try:
+            # Try to load the pytorch_model.bin or model.safetensors file
+            print(f"Loading model from: {pretrained_name_or_path}")
+            try:
+                from transformers.utils import cached_file
+
+                # Try safetensors first
+                resolved_file = cached_file(
+                    pretrained_name_or_path,
+                    "model.safetensors",
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    resume_download=resume_download,
+                    proxies=proxies,
+                    token=token,
+                    revision=revision,
+                    local_files_only=local_files_only,
+                )
+                from safetensors.torch import load_file
+
+                original_state_dict = load_file(resolved_file)
+                print("✓ Loaded state dict from model.safetensors")
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to load pretrained weights from '{pretrained_name_or_path}': {e}"
+                ) from e
+
+            # First, fix any key differences # see openpi `model.py, _fix_pytorch_state_dict_keys`
+            fixed_state_dict = model._fix_pytorch_state_dict_keys(original_state_dict, model.config)
+
+            # Then add "model." prefix for all keys that don't already have it
+            remapped_state_dict = {}
+            remap_count = 0
+
+            for key, value in fixed_state_dict.items():
+                if not key.startswith("model."):
+                    new_key = f"model.{key}"
+                    remapped_state_dict[new_key] = value
+                    remap_count += 1
+                    if remap_count <= 10:  # Only print first 10 to avoid spam
+                        print(f"Remapped: {key} -> {new_key}")
+                else:
+                    remapped_state_dict[key] = value
+
+            if remap_count > 0:
+                print(f"Remapped {remap_count} state dict keys")
+
+            # Load the remapped state dict into the model
+            missing_keys, unexpected_keys = model.load_state_dict(remapped_state_dict, strict=False)
+            # missing_keys, unexpected_keys = model.load_state_dict(remapped_state_dict, strict=strict)
+
+            # ADDED: Handle weight tying for embed_tokens
+            tie_key = "model.paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight"
+            if tie_key in missing_keys:
+                paligemma = model.model.paligemma_with_expert.paligemma
+                if cls._tie_or_copy_language_embeddings(paligemma):
+                    print("✓ Tied language embeddings to lm_head weight")
+                    missing_keys = [key for key in missing_keys if key != tie_key]
+                else:
+                    raise RuntimeError(
+                        "Failed to tie embed_tokens.weight to lm_head.weight. "
+                        "Training with these untied will silently drift the input/output embeddings. "
+                        "Inspect PaliGemmaForConditionalGenerationWithPiGemma construction."
+                    )
+
+            # ADDED: Re-enforce strictness if requested by caller
+            if strict and (missing_keys or unexpected_keys):
+                error_msg = f"Error loading state dict with strict={strict}\n"
+                if missing_keys:
+                    error_msg += f"Missing keys: {missing_keys}\n"
+                if unexpected_keys:
+                    error_msg += f"Unexpected keys: {unexpected_keys}\n"
+                raise RuntimeError(error_msg)
+
+            if missing_keys:
+                print(f"Missing keys when loading state dict: {len(missing_keys)} keys")
+                if len(missing_keys) <= 5:
+                    for key in missing_keys:
+                        print(f"  - {key}")
+                else:
+                    for key in missing_keys[:5]:
+                        print(f"  - {key}")
+                    print(f"  ... and {len(missing_keys) - 5} more")
+
+            if unexpected_keys:
+                print(f"Unexpected keys when loading state dict: {len(unexpected_keys)} keys")
+                if len(unexpected_keys) <= 5:
+                    for key in unexpected_keys:
+                        print(f"  - {key}")
+                else:
+                    for key in unexpected_keys[:5]:
+                        print(f"  - {key}")
+                    print(f"  ... and {len(unexpected_keys) - 5} more")
+
+            if not missing_keys and not unexpected_keys:
+                print("All keys loaded successfully!")
+
+        except Exception as e:
+            # A failed load must be fatal: silently returning a randomly-initialized model
+            # would invalidate any downstream training or evaluation without warning.
+            raise RuntimeError(
+                f"Failed to load/remap π0.5 pretrained weights from '{pretrained_name_or_path}': {e}"
+            ) from e
+
+        return model
+
+    def _fix_pytorch_state_dict_keys(
+            self, state_dict, model_config
+    ):  # see openpi `BaseModelConfig, _fix_pytorch_state_dict_keys`
+        """Fix state dict keys to match current model architecture."""
+        import re
+
+        fixed_state_dict = {}
+
+        for key, value in state_dict.items():
+            # LeRobot/OpenPI checkpoints may contain an output head for the action
+            # expert.  The expert consumes continuous action embeddings and never
+            # produces vocabulary logits, so PI05Pytorch deliberately deletes this
+            # layer during construction.  Ignore only this known, unused checkpoint
+            # tensor and keep strict loading enabled for every other incompatibility.
+            normalized_key = key.removeprefix("model.")
+            if normalized_key == "paligemma_with_expert.gemma_expert.lm_head.weight":
+                logging.info("Skipping unused action-expert lm_head weight: %s", key)
+                continue
+
+            new_key = key
+
+            # Handle layer norm structure changes: .weight -> .dense.weight + .dense.bias
+            # For gemma expert layers
+            if re.match(
+                    r"paligemma_with_expert\.gemma_expert\.model\.layers\.\d+\.(input_layernorm|post_attention_layernorm)\.weight",
+                    key,
+            ):
+                # Check if the model actually has adaRMS enabled for the expert
+                expert_uses_adarms = getattr(
+                    self.model.paligemma_with_expert.gemma_expert.config, "use_adarms", False
+                )
+                if expert_uses_adarms:
+                    logging.warning(f"Skipping layer norm key (adaRMS mismatch): {key}")
+                    continue
+
+            if re.match(r"paligemma_with_expert\.gemma_expert\.model\.norm\.weight", key):
+                # Check if the model actually has adaRMS enabled for the expert
+                expert_uses_adarms = getattr(
+                    self.model.paligemma_with_expert.gemma_expert.config, "use_adarms", False
+                )
+                if expert_uses_adarms:
+                    logging.warning(f"Skipping norm key (adaRMS mismatch): {key}")
+                    continue
+
+            # Handle MLP naming changes for pi05
+            # pi05 model expects time_mlp_*, but checkpoint might have action_time_mlp_*
+            if key.startswith("action_time_mlp_in."):
+                new_key = key.replace("action_time_mlp_in.", "time_mlp_in.")
+            elif key.startswith("action_time_mlp_out."):
+                new_key = key.replace("action_time_mlp_out.", "time_mlp_out.")
+            # Also handle state_proj which shouldn't exist in pi05
+            if key.startswith("state_proj."):
+                logging.warning(f"Skipping state_proj key in pi05 mode: {key}")
+                continue
+
+            # Handle vision tower embedding layer potential differences
+            if "patch_embedding" in key:
+                # Some checkpoints might have this, but current model expects different structure
+                logging.warning(f"Vision embedding key might need handling: {key}")
+
+            fixed_state_dict[new_key] = value
+
+        return fixed_state_dict
+
+    def get_optim_params(self) -> dict:
+        return self.parameters()
+
+    def reset(self):
+        """Reset internal state - called when environment resets."""
+        self._action_queue = deque(maxlen=self.config.n_action_steps)
+        self._queues = {
+            ACTION: deque(maxlen=self.config.n_action_steps),
+        }
+        # Subtask caching state - regenerate every `subtask_regeneration_interval` seconds
+        self._cached_subtask_tokens: Tensor | None = None
+        self._cached_subtask_masks: Tensor | None = None
+        self._last_subtask_time: float | None = None
+
+    def init_rtc_processor(self):
+        """Initialize RTC processor if RTC is enabled in config."""
+        self.rtc_processor = None
+
+        # Create processor if config provided
+        # If RTC is not enabled - we can still track the denoising data
+        if self.config.rtc_config is not None:
+            self.rtc_processor = RTCProcessor(self.config.rtc_config)
+
+            model_value = getattr(self, "model", None)
+            if model_value is not None:
+                model_value.rtc_processor = self.rtc_processor
+
+    def _rtc_enabled(self) -> bool:
+        return self.config.rtc_config is not None and self.config.rtc_config.enabled
+
+    def _preprocess_images(self, batch: dict[str, Tensor]) -> tuple[list[Tensor], list[Tensor]]:
+        """Preprocess images for the model.
+
+        Images from LeRobot are typically in [B, C, H, W] format and normalized to [0, 1].
+        PaliGemma expects images in [B, C, H, W] format and normalized to [-1, 1].
+        """
+        images = []
+        img_masks = []
+
+        # Get device from model parameters
+        device = next(self.parameters()).device
+
+        present_img_keys = [key for key in self.config.image_features if key in batch]
+        missing_img_keys = [key for key in self.config.image_features if key not in batch]
+
+        if len(present_img_keys) == 0:
+            raise ValueError(
+                f"All image features are missing from the batch. At least one expected. "
+                f"(batch: {batch.keys()}) (image_features: {self.config.image_features})"
+            )
+
+        # Preprocess image features present in the batch
+        for key in present_img_keys:
+            img = batch[key]
+
+            # Ensure tensor is on the same device as the model
+            if img.device != device:
+                img = img.to(device)
+
+            if img.dtype == torch.uint8:
+                img = img.to(torch.float32) / 255.0
+            elif img.dtype != torch.float32:
+                img = img.to(torch.float32)
+
+            # from openpi preprocess_observation_pytorch: Handle both [B, C, H, W] and [B, H, W, C] formats
+            is_channels_first = img.shape[1] == 3  # Check if channels are in dimension 1
+
+            if is_channels_first:
+                # Convert [B, C, H, W] to [B, H, W, C] for processing
+                img = img.permute(0, 2, 3, 1)
+
+            # from openpi preprocess_observation_pytorch: Resize with padding if needed
+            if img.shape[1:3] != self.config.image_resolution:
+                img = resize_with_pad_torch(img, *self.config.image_resolution)
+
+            # Normalize from [0,1] to [-1,1] as expected by siglip
+            img = img * 2.0 - 1.0
+
+            # from openpi preprocess_observation_pytorch: Convert back to [B, C, H, W] format if it was originally channels-first
+            if is_channels_first:
+                img = img.permute(0, 3, 1, 2)  # [B, H, W, C] -> [B, C, H, W]
+
+            images.append(img)
+            # Create mask (all ones for real images)
+            bsize = img.shape[0]
+            mask = torch.ones(bsize, dtype=torch.bool, device=device)
+            img_masks.append(mask)
+
+        # Create image features not present in the batch as fully 0 padded images
+        for _num_empty_cameras in range(len(missing_img_keys)):
+            img = torch.ones_like(img) * -1  # Padded with -1 for SigLIP
+            mask = torch.zeros_like(mask)  # Mask is zero for empty cameras
+            images.append(img)
+            img_masks.append(mask)
+
+        return images, img_masks
+
+    def prepare_action(self, batch):
+        """Pad action"""
+        actions = pad_vector(batch[ACTION], self.config.max_action_dim)
+        return actions
+
+    @torch.no_grad()
+    def select_action(self, batch: dict[str, Tensor]) -> Tensor:
+        """Select a single action given environment observations."""
+        assert not self._rtc_enabled(), (
+            "RTC is not supported for select_action, use it with predict_action_chunk"
+        )
+
+        self.eval()
+
+        # Action queue logic for n_action_steps > 1
+        if len(self._action_queue) == 0:
+            # TODO: jadechoghari, generate subtask tokens here - ideally every 1 second
+            actions = self.predict_action_chunk(batch)[:, : self.config.n_action_steps]
+            # Transpose to get shape (n_action_steps, batch_size, action_dim)
+            self._action_queue.extend(actions.transpose(0, 1))
+
+        return self._action_queue.popleft()
+
+    @torch.no_grad()
+    def predict_action_chunk(self, batch: dict[str, Tensor], **kwargs: Unpack[ActionSelectKwargs]) -> Tensor:
+        """Predict a chunk of actions given environment observations."""
+        self.eval()
+
+        # Prepare inputs
+        images, img_masks = self._preprocess_images(batch)
+        # tokens, masks = batch[f"{OBS_LANGUAGE_TOKENS}"], batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
+        high_level_task_tokens, high_level_task_masks = batch[f"{OBS_LANGUAGE_USER_PROMPT_TOKENS}"], batch[
+            f"{OBS_LANGUAGE_USER_PROMPT_ATTENTION_MASK}"]
+
+        # Generate subtask tokens with time-based caching
+        # Only regenerate if: no cache, or interval elapsed, or interval is 0 (always regenerate)
+        current_time = time.time()
+        interval = self.config.subtask_regeneration_interval
+        should_regenerate = (
+                self._cached_subtask_tokens is None
+                or self._last_subtask_time is None
+                or interval <= 0  # 0 means regenerate every call
+                or (current_time - self._last_subtask_time) >= interval
+        )
+
+        if should_regenerate:
+            # Why this regeneration fired (for the log below), computed before we
+            # overwrite _last_subtask_time.
+            if self._cached_subtask_tokens is None or self._last_subtask_time is None:
+                reason = "no cache (first chunk)"
+            elif interval <= 0:
+                reason = "interval<=0 (every chunk)"
+            else:
+                reason = f"{current_time - self._last_subtask_time:.2f}s elapsed >= {interval}s"
+
+            gen_t0 = time.time()
+            subtask_tokens, subtask_masks = self.model.generate_subtask_tokens(
+                images, img_masks, high_level_task_tokens, high_level_task_masks,
+                max_decoding_steps=self.config.max_decoding_steps
+            )
+            self._cached_subtask_tokens = subtask_tokens
+            self._cached_subtask_masks = subtask_masks
+            self._last_subtask_time = current_time
+
+            # Log the self-generated subtask so operators can see what high-level step
+            # π0.5 believes it is executing (the key thing to sanity-check when action
+            # quality is poor: is the subtask text sensible and does it terminate?).
+            subtask_text = self.model.decode_subtask_text(subtask_tokens, subtask_masks)
+            eos_id = self.model._paligemma_tokenizer.eos_token_id
+            n_valid = int(subtask_masks[0].sum().item())
+            hit_eos = eos_id in subtask_tokens[0].tolist()
+            logging.info(
+                "[pi05 subtask] regenerated (%s) in %.0f ms: %r | valid_tokens=%d/%d eos=%s",
+                reason, (time.time() - gen_t0) * 1e3, subtask_text,
+                n_valid, subtask_tokens.shape[1], hit_eos,
+            )
+        else:
+            subtask_tokens = self._cached_subtask_tokens
+            subtask_masks = self._cached_subtask_masks
+
+        # Sample actions using the model (pass through RTC kwargs, no separate state needed for PI05)
+        actions = self.model.sample_actions(images, img_masks, high_level_task_tokens, high_level_task_masks,
+                                            subtask_tokens, subtask_masks, **kwargs)
+        # Unpad actions to actual action dimension
+        original_action_dim = self.config.output_features[ACTION].shape[0]
+        actions = actions[:, :, :original_action_dim]
+
+        return actions
+
+    def forward(self, batch: dict[str, Tensor], reduction: str = "mean") -> tuple[Tensor, dict]:
+        """Run the batch through the model and compute the loss for training.
+
+        Args:
+            batch: Training batch containing observations and actions.
+            reduction: How to reduce the loss. Options:
+                - "mean": Return scalar mean loss (default, backward compatible)
+                - "none": Return per-sample losses of shape (batch_size,) for RA-BC weighting
+        """
+        # Prepare inputs
+        images, img_masks = self._preprocess_images(batch)
+
+        high_level_task_tokens, high_level_task_masks = batch[f"{OBS_LANGUAGE_TOKENS}"], batch[
+            f"{OBS_LANGUAGE_ATTENTION_MASK}"]
+        subtask_tokens, subtask_masks = batch[f"{OBS_LANGUAGE_SUBTASK_TOKENS}"], batch[
+            f"{OBS_LANGUAGE_SUBTASK_ATTENTION_MASK}"]
+        action_tokens, action_masks = batch[f"{ACTION_TOKENS}"], batch[f"{ACTION_TOKEN_MASK}"]
+
+        actions = self.prepare_action(batch)
+
+        # Compute loss (no separate state needed for PI05)
+        loss_dict = self.model.forward(images, img_masks, high_level_task_tokens, high_level_task_masks, subtask_tokens,
+                                       subtask_masks, action_tokens, action_masks, actions)
+
+        # Extract the total loss
+        loss = loss_dict["loss"]
+
+        # Prepare detailed loss dictionary for logging
+        detailed_loss_dict = {
+            "loss": loss.item(),
+            "flow_mse_loss": loss_dict["flow_mse_loss"].mean().item(),
+            "subtask_ce_loss": loss_dict["subtask_ce_loss"].item(),
+            "action_ce_loss": loss_dict["action_ce_loss"].item(),
+        }
+
+        return loss, detailed_loss_dict
+

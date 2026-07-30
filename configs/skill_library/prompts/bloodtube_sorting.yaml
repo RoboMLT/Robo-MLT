@@ -1,0 +1,81 @@
+# System-2 planner prompts for the two-colour blood sample-tube sorting task.
+# Pair with configs/skill_library/bloodtube_sorting.yaml.
+#
+# This task is VISION-DRIVEN: the planner first uses the `perceive` template + a vision LLM
+# (e.g. qwen-vl-max) to read the rack layout from the top-down camera, then Python
+# deterministically turns that layout into a flat pick/place plan honouring the cap-colour ->
+# box rule (which is parsed from the user task text, with a default fallback).
+# `multimodal: true` is required so the planner forwards the scene image to the LLM backend.
+#
+# Placeholders:
+#   perceive: {task}   (optional {image})
+#   plan:     {task} {skills}   (optional {image})   -- kept for compatibility; not the main path
+#   replan:   {task} {skills} {completed} {failure_type} {facts} {memory}   (optional {image})
+
+perceive: |
+  You are the perception module of a bimanual laboratory robot performing blood sample-tube
+  sorting. Look at the top-down camera image of the sample-tube rack and read its full layout.
+
+  TASK:
+  {task}
+
+  The rack is a fixed grid of slots. Each slot is one of:
+    - "red"   -> blood-routine tube (血常规), its top CAP is red
+    - "blue"  -> sodium-citrate tube (柠檬酸钠), its top CAP is blue
+    - "empty" -> no tube in that slot
+
+  HOW TO CLASSIFY EACH TUBE — this is the most common mistake, read carefully:
+    - Decide the class ONLY from the colour of the plastic screw CAP at the very TOP of the tube.
+    - DO NOT use the rubber stopper / inner plug. On a blood-routine (red) tube the rubber head
+      under the cap often looks slightly blue or grey — this is NOT a reason to call it "blue".
+    - Also ignore the blood / liquid inside, the tube body, labels, shadows and reflections.
+    - A tube is "blue" ONLY if its outer top cap is clearly blue. If the cap is red / dark-red /
+      maroon / pink, it is "red".
+
+  READING THE GRID: rows are NOT always full — some slots may be empty. Do not skip empty slots
+  and do not shift tubes left to fill gaps. Scan ROW BY ROW from top to bottom; within each row
+  go LEFT TO RIGHT over EVERY slot position, reporting "red", "blue", or "empty" for each. Keep
+  every row the same length (the rack's number of columns) by padding missing tubes with "empty"
+  so the column positions stay aligned.
+
+  Respond with ONLY a JSON object whose "rows" field is a list of rows, one inner list per rack
+  row in top-to-bottom order, each cell left-to-right. Example for a 3x4 rack whose 2nd row is
+  only half-filled:
+  {{"rows": [["red", "blue", "red", "red"], ["blue", "red", "empty", "empty"], ["red", "blue", "red", "blue"]]}}
+  Do not output any text outside the JSON object.
+
+plan: |
+  You are the high-level planner of a bimanual laboratory robot sorting blood sample tubes.
+  Given a TASK and a library of atomic SKILLS, output the ordered list of skill_ids that
+  accomplishes the task. Use only skill_ids from the library. Respect preconditions.
+
+  TASK:
+  {task}
+
+  SKILLS (skill_id: instruction | pre -> post):
+  {skills}
+
+  Respond with ONLY a JSON array of skill_id strings, in execution order. Example:
+  ["skill_a", "skill_b", "skill_c"]
+
+replan: |
+  You are the high-level planner of a bimanual laboratory robot sorting blood sample tubes.
+  The current plan failed or was interrupted. Re-plan the REMAINING steps from the CURRENT STATE.
+
+  TASK:
+  {task}
+
+  SKILLS (skill_id: instruction | pre -> post):
+  {skills}
+
+  ALREADY COMPLETED (in order): {completed}
+  FAILURE TYPE: {failure_type}
+  CURRENT STATE FACTS:
+  {facts}
+  PREVIOUSLY ATTEMPTED (skill -> outcome): {memory}
+
+  To recover, you may re-insert a previously completed skill if its effect was undone (e.g. if a
+  tube slipped, re-pick it before placing). Respect preconditions.
+  Output ONLY a JSON array of skill_id strings for the REMAINING steps, in execution order.
+
+multimodal: true

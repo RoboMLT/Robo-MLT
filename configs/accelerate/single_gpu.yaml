@@ -1,0 +1,15 @@
+# Accelerate launch config — single GPU, bf16.
+# For local debugging or large-memory cloud cards (A100/H100) that fit the model alone.
+#   accelerate launch --config_file configs/accelerate/single_gpu.yaml \
+#       -m low_level_model.training.train_system1 configs/system1/train/pi05.yaml
+#
+# NOTE: the trainer sets mixed precision from policy.dtype (bf16); the value here just keeps
+# Accelerate consistent. Gradient accumulation is driven by the trainer's grad_accum_steps.
+compute_environment: LOCAL_MACHINE
+distributed_type: 'NO'
+mixed_precision: bf16
+num_processes: 1
+num_machines: 1
+machine_rank: 0
+gpu_ids: '0'
+use_cpu: false

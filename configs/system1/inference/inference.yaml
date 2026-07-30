@@ -1,0 +1,61 @@
+robot:
+  type: piper
+
+# ── System 1 (PI0 Executor) ───────────────────────────────────────────────────
+policy_path: <path/to/pi0_checkpoint>/pretrained_model
+task: "pick up routine blood tubes, and place in the orange plate."
+device: cuda:0
+fps: 20
+control_time_s: 60000
+overlap_steps: 8
+num_inference_steps: 10
+compile_model: true
+compile_mode: max-autotune
+compile_cache_dir: torch_compile_cache/tubesort_pi0       # e.g. ./torch_compile_cache
+
+# ── System 2 (Reasoner; null → run System 1 only) ─────────────────────────────
+# No dataset is needed to build the System-2 backbone (a frozen SigLIP2 encoder) — only the
+# trained gate checkpoint below.
+skill_library: configs/skill_library/bloodtube_sorting.yaml
+gate_ckpt: <path/to/completion_gate_best.pth>   # run folder or .pth
+camera_names: [observation.images.cam_top, observation.images.cam_left]
+sampling_interval: 15     # K: System-2 frame-sampling interval (paper Table tab:hyperparams)
+cooldown_s: 3.0           # min wall-clock seconds between skill switches (gate side)
+
+pipeline:
+  tau_done: 0.6     # advance threshold (paper Table tab:hyperparams)
+  k_a: 2            # advance debounce
+  cooldown: 10      # switch cooldown, in System-2 ticks (Δ_cd)
+  tau_back: 0.8     # recover threshold
+  k_b: 3            # recover debounce
+  replan_budget: 3
+  back_ema_alpha: 0.5
+  completion_median_window: 3 # small median kills single-frame completion spikes
+  completion_ema_alpha: 0.5
+
+smoothing:
+  enabled: true
+  latency_k: 0
+  min_smooth_steps: 4      # minimum cross-fade window (steps)
+  weight_profile: linear   # "linear" (χ₀) or "smoothstep" (C1, gentler velocity)
+
+# inpainting). MUTUALLY EXCLUSIVE with smoothing — set smoothing.enabled=false to use.
+rtc:
+  enabled: false
+  prefix_attention_schedule: exp   # exp (paper) | linear | zeros (hard) | ones
+  max_guidance_weight: 10.0        # beta, ΠGDM guidance-weight clip
+  execution_horizon: 10            # s: overlap region regenerated freshly
+  # inference delay d is auto-measured (ceil(latency*fps)); bound it here:
+  delay_window: 50                 # latency estimator sliding window (samples)
+  min_inference_delay: 3
+  max_inference_delay: null        # null -> execution_horizon - 1
+  debug: false
+
+use_llm: false
+llm_model: qwen-plus
+planner_prompt: ""
+
+# ── Live status view (OpenCV window: observation images + System-2 plan/stage overlay) ──
+enable_view: true        # set true to open the live window during deployment
+view_bgr: true            # convert RGB->BGR for cv2 display (RealSense frames are RGB)
+view_max_width: 1280      # max width of the tiled camera strip(downscaled if larger)

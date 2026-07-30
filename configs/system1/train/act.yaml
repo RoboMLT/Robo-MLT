@@ -1,0 +1,79 @@
+# System 1 — ACT (Action Chunking Transformer) training configuration.
+# Usage:
+#   python -m low_level_model.training.train_system1 configs/system1/train/act.yaml
+# Override keys via CLI, e.g.:
+#   ... act.yaml batch_size=16 dataset.repo_id=my/repo optimizer.lr=1e-5
+
+# ── Policy ───────────────────────────────────────────────────────────────────
+policy:
+  type: act
+  device: cuda:0
+  n_obs_steps: 1            # ACT requires exactly 1 observation step
+  chunk_size: 50
+  n_action_steps: 50
+  # Vision backbone (torchvision ResNet); weights downloaded on first run.
+  vision_backbone: resnet18
+  pretrained_backbone_weights: ResNet18_Weights.IMAGENET1K_V1
+  # Transformer / VAE
+  dim_model: 512
+  n_heads: 8
+  dim_feedforward: 3200
+  n_encoder_layers: 4
+  n_decoder_layers: 1
+  use_vae: true
+  latent_dim: 32
+  kl_weight: 10.0
+  dropout: 0.1
+  # Per-group LR for the conv backbone (the main LR comes from `optimizer.lr` below).
+  optimizer_lr_backbone: 1.0e-5
+
+# ── Dataset ──────────────────────────────────────────────────────────────────
+dataset:
+  repo_id: <path/to/data>/PickandPlaceTube_0614
+  root: null
+  video_backend: pyav
+  use_imagenet_stats: false   # ACT normalises images itself via dataset MEAN_STD stats
+  filter_back_events: true
+  skill_library: null
+  subtask_index_column: subtask_index
+
+# ── Training loop ─────────────────────────────────────────────────────────────
+output_dir: outputs/train_vla/act_PickandPlaceTube_0614
+job_name: act_system1
+batch_size: 8
+steps: 100000
+num_workers: 4
+seed: 1000
+grad_accum_steps: 1
+resume: false
+
+# ── Optimizer ────────────────────────────────────────────────────────────────
+optimizer:
+  lr: 1.0e-5
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 1.0e-4
+  grad_clip_norm: 10.0
+
+# ── LR Scheduler (cosine warm-up then decay) ─────────────────────────────────
+scheduler:
+  warmup_steps: 500
+  decay_steps: 90000
+  decay_lr: 1.0e-6
+
+# ── Checkpointing ─────────────────────────────────────────────────────────────
+save_checkpoint: true
+save_freq: 10000
+log_freq: 50
+
+# ── Weights & Biases ─────────────────────────────────────────────────────────
+wandb:
+  enable: false
+  mode: offline
+  project: RoboMLT_system1
+  entity: xdedm7-chongqing-university
+  disable_artifact: true
+
+# ACT has no shared-observation / delay-augmentation support — keep both off.
+max_delay_steps: 0
+shared_observation: false

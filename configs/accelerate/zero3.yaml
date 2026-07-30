@@ -1,0 +1,24 @@
+# Accelerate launch config — multi-GPU DeepSpeed ZeRO-3, bf16.
+# Shards params + gradients + optimizer states across GPUs — the most memory-efficient mode.
+# Needed to fit the 3.6B π0.5 full-finetune on 2× RTX 4090D (24 GB).
+#   accelerate launch --config_file configs/accelerate/zero3.yaml \
+#       -m low_level_model.training.train_system1 configs/system1/train/pi05.yaml
+# Requires: pip install deepspeed
+#
+# Add offload_optimizer_device: cpu (and/or offload_param_device: cpu) if still OOM — slower
+# but fits on smaller cards. gradient_accumulation_steps stays 1 (trainer does accumulation).
+compute_environment: LOCAL_MACHINE
+distributed_type: DEEPSPEED
+mixed_precision: bf16
+num_processes: 2
+num_machines: 1
+machine_rank: 0
+use_cpu: false
+deepspeed_config:
+  zero_stage: 3
+  gradient_accumulation_steps: 1
+  gradient_clipping: 1.0
+  offload_optimizer_device: none
+  offload_param_device: none
+  zero3_init_flag: false
+  zero3_save_16bit_model: true

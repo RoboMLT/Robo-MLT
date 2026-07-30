@@ -1,0 +1,82 @@
+# pi0 baseline (PaliGemma + flow-matching action expert) training configuration.
+# Not Robo-MLT's System 1 (see configs/system1/train/qwen3vl_vla.yaml for that) — this is the
+# pi0 baseline reported in the paper's Table tab:main_results.
+# Usage:
+#   python -m low_level_model.training.train_system1 \
+#       configs/system1/train/pi0.yaml
+#
+# Override individual keys via CLI:
+#   ... pi0.yaml batch_size=16 dataset.repo_id=my/repo optimizer.lr=1e-4
+# ── Policy ───────────────────────────────────────────────────────────────────
+policy:
+  type: pi0_system1
+  # null  → train from scratch; set to "lerobot/pi0_base" for fine-tuning
+  pretrained_path: lerobot/pi0_base
+  push_to_hub: false
+  dtype: bfloat16
+  device: cuda:0
+  chunk_size: 40
+  n_action_steps: 40
+  gradient_checkpointing: false
+  fuse_qkv: false       # keep off during training; enable at inference
+  fuse_gate_up: false
+  compile_model: false
+
+# ── Dataset ──────────────────────────────────────────────────────────────────
+dataset:
+  repo_id: <path/to/data>/BloodGasAnalysis_20260621
+  root: null
+  video_backend: pyav
+  use_imagenet_stats: true
+  # Exclude samples whose action chunk overlaps a back_event (erroneous) frame so the VLA never
+  # imitates deliberately-bad recovery poses. No-op if the dataset has no back_event column.
+  filter_back_events: true
+  # Per-frame atomic-skill language conditioning. Set to a configs/skill_library/*.yaml path to map
+  # each frame's subtask_index -> that skill's canonical_instruction and train the prompt
+  # "task: <high> subtask: <atomic>" — matching what System 2 feeds at deployment. null keeps the
+  # legacy single-prompt behaviour. NOTE: deploy must use the SAME high-level task string
+  # (inference.yaml `task:`) as the dataset's task, or the prompts won't match.
+  skill_library: null            # e.g. configs/skill_library/bloodgas.yaml
+  # subtask_map: null            # optional explicit {index: instruction} override of skill_library
+  subtask_index_column: subtask_index
+
+# ── Training loop ─────────────────────────────────────────────────────────────
+output_dir: outputs/train_vla/pi0_BloodGasAnalysis_20260622
+job_name: pi0_system1_blood_gas_analysis
+batch_size: 4
+steps: 60000
+num_workers: 4
+seed: 1000
+grad_accum_steps: 1
+resume: false
+
+# ── Optimizer ────────────────────────────────────────────────────────────────
+optimizer:
+  lr: 2.5e-5
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 0.01
+  grad_clip_norm: 1.0
+
+# ── LR Scheduler (cosine warm-up then decay) ─────────────────────────────────
+scheduler:
+  warmup_steps: 1000
+  decay_steps: 50000      # steps over which lr decays from peak to decay_lr
+  decay_lr: 2.5e-6
+
+# ── Checkpointing ─────────────────────────────────────────────────────────────
+save_checkpoint: true
+save_freq: 20000
+log_freq: 50
+
+# ── Weights & Biases ─────────────────────────────────────────────────────────
+wandb:
+  enable: false
+  mode: offline
+  project: RoboMLT_system1
+  entity: xdedm7-chongqing-university
+  disable_artifact: true
+
+# Set to N to enable random delays from [0, N]
+max_delay_steps: 6
+shared_observation: true

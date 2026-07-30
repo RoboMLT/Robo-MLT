@@ -1,0 +1,104 @@
+# System-2 CompletionGate training — Task 1: blood gas analysis (bimanual).
+#
+# Data: the `blood_gas_analysis` subset of the released RoboMLT-Lab corpus.
+#   python -m high_level_model.training.train_competion_gate \
+#       configs/system2/train/completion_gate_bloodgas.yaml \
+#       dataset.repo_id=/abs/path/to/RoboMLT-Lab/blood_gas_analysis
+#
+# Episode selection — three filters:
+#   * max_episode_index: 281 — the release pads itself to 1500 episodes by duplicating takes
+#     (byte-identical copies, used as sample weighting). Only the first 281 indices are distinct
+#     recordings. Without this cut a val episode is routinely a copy of a train episode.
+#   * min_episode_len: 1000 — the long-horizon *workflow* episodes: a complete procedure across
+#     all eight atomic skills. 28 of the 281 distinct takes qualify (four of them >4000 frames,
+#     i.e. multi-sample runs). These are what supervise the completion head.
+#   * include_back_episodes: true — UNION with every episode carrying a back_event frame. Only 3
+#     of the 28 long takes contain one (267 frames total); the disturbance segments were recorded
+#     as short standalone clips. Folding those 45 extra clips in takes the back head from 267 to
+#     5840 positive frames, which is the difference between a trainable and an untrainable beta_t.
+# Result: a 73-episode / ~58.4k-frame pool, split 62 train / 11 val.
+#
+# episode_subset_seed = 9 is chosen so that all four >4000-frame multi-sample demos (episodes
+# 0/1/2/262) land in TRAIN, while four ordinary long episodes (240/247/259/261) stay in VAL — the
+# closed-loop demo video is rendered on one of those, so it is genuinely held out.
+
+# ── Dataset ──────────────────────────────────────────────────────────────────
+dataset:
+  repo_id: <path/to>/RoboMLT-Lab/blood_gas_analysis
+  camera_names:               # bimanual: three cameras
+    - observation.images.cam_top
+    - observation.images.cam_left
+    - observation.images.cam_right
+  max_episode_index: 281      # keep the distinct takes; drop the duplicated tail
+  min_episode_len: 1000       # long-horizon workflow episodes ...
+  include_back_episodes: true  # ... UNION with every episode that has a back_event frame
+  back_from_column: true      # read back_event inline from the dataset column
+  # Video timestamps drift ~2e-4 s in the source captures; lerobot's 1e-4 default aborts the
+  # feature precompute with FrameTimestampError. 1e-2 = 1/4 frame @ 25 fps.
+  tolerance_s: 1.0e-2
+  val_repo_id: null           # single-dataset split (held-out episodes of repo_id)
+  val_episodes: null
+  train_ratio: 0.85           # 62 train / 11 val over the 73-episode pool
+  episode_subset_seed: 9      # see header: pins the four multi-sample demos into train
+  history_len: 6              # M
+  prediction_offset: 0
+  history_skip_frame: 10
+  random_skip_range: 10       # Δ_max
+  max_episodes: null
+  use_command_in_meta: false
+  skill_library: configs/skill_library/bloodgas.yaml
+  back_annotations: null
+  min_segment_len: 0
+  completion_window: 50
+  completion_at_episode_end: true
+
+# ── Segment batch sampler (balances the rare positives per batch) ────────────
+sampler:
+  use_segment_sampler: true
+  segs_per_batch: 8
+  frames_per_seg: 8            # batch = 64
+
+# ── Model / backbone ─────────────────────────────────────────────────────────
+model:
+  freeze_siglip: true
+  temporal_layers: 2
+  temporal_heads: 8
+  use_cross_attention: false
+  cross_attn_heads: 8
+
+# ── Optimizer ────────────────────────────────────────────────────────────────
+optimizer:
+  lr: 1.0e-4
+  weight_decay: 0.05
+
+# ── Loss weights (paper Eq. 7) ────────────────────────────────────────────────
+loss:
+  lambda_back: 1.0            # back head is supervised (45 back clips ∪ 3 long takes)
+  lambda_completion: 1.0
+  back_pos_weight: null        # null -> auto-computed (w_b)
+  completion_pos_weight: null  # null -> auto-computed (w_c)
+
+# ── Feature / text-embedding cache (training-speed) ──────────────────────────
+cache:
+  features: true
+  text_embeddings: true
+  precompute_batch_size: 32
+  dir: outputs/feature_cache
+  reuse_disk: true
+
+# ── Weights & Biases (opt-in) ────────────────────────────────────────────────
+wandb:
+  enable: false
+  mode: offline
+  project: RoboMLT_system2
+  entity: ""
+  log_interval: 50
+
+# ── Training loop ─────────────────────────────────────────────────────────────
+batch_size: 64
+num_workers: 4
+num_epochs: 30
+output_dir: outputs/completion_gate_bloodgas
+run_name: null
+gpu: 1
+save_interval: 0

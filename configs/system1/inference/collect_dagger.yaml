@@ -1,0 +1,54 @@
+# DAgger data collection (System 1 rollouts + subtask labels) configuration.
+# Usage:
+#   python -m low_level_model.robot.collect_dagger_dataset \
+#       configs/system1/inference/collect_dagger.yaml
+#
+# Override individual keys via CLI (dot-notation for nested keys):
+#   ... collect_dagger.yaml root=data/dagger_run2 target_fps=20 robot.type=so101_follower
+
+# ── Robot (lerobot ChoiceRegistry; `type` selects the config subclass) ────────
+# dual_piper defaults: can_port_left/right = can_left/can_right, three RealSense
+# cameras (cam_left / cam_right / cam_top, 320x180@60). Uncomment to override.
+robot:
+  type: piper
+
+# ── System 1 (PI0 Executor) ───────────────────────────────────────────────────
+policy_path: <path/to/pi0_checkpoint>/pretrained_model
+task: "pick up routine blood tubes, and place in the orange plate."  # default task / digit-0 reset text
+device: cuda:0
+overlap_steps: 8           # chunk overlap for async prefetch (0 = synchronous)
+
+
+compile_model: true        # true/false to override; null = keep checkpoint setting
+compile_mode: max-autotune         # e.g. max-autotune, reduce-overhead
+compile_cache_dir: torch_compile_cache/tubesort_pi0     # e.g. ./torch_compile_cache/pickandplacetube
+
+smoothing:
+  enabled: true
+  latency_k: 0          # null → overlap_steps; set to measured inference delay (steps)
+  min_smooth_steps: 4      # minimum cross-fade window (steps)
+  weight_profile: linear   # "linear" (χ₀) or "smoothstep" (C1, gentler velocity)
+
+# ── Subtask labelling (digit keys 1-9 → declaration-order skills) ─────────────
+# Optional; omit / set null to disable digit-key subtask switching.
+skill_library: configs/skill_library/bloodtube_sorting.yaml
+
+# ── Recording ─────────────────────────────────────────────────────────────────
+repo_id: piper/TubeSort_dagger_20260718
+root: <path/to/data>/TubeSort_dagger_20260718
+fps: 25                    # control/capture frequency (Hz)
+target_fps: 25             # dataset fps (frames resampled to this rate at save)
+control_time_s: 600
+max_timesteps: 10000       # cap on buffered frames per episode
+use_videos: true           # MP4 video (false → PNG images)
+resume: true               # resume an existing dataset at `root` (false → confirm + overwrite)
+
+video_codec: h264_nvenc
+streaming_encoding: true
+encoder_threads: 4
+
+# ── Live operator view (OpenCV: observation images + task/subtask + REC/back) ──
+enable_view: true         # true to open the live window during collection
+view_bgr: true             # convert RGB->BGR for cv2 display (RealSense frames are RGB)
+view_max_width: 1280       # max width of the tiled camera strip (downscaled if larger)
+

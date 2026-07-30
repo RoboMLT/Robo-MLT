@@ -1,0 +1,41 @@
+robot:
+  type: piper
+
+# π0.5 checkpoint dir (must contain config.json with type: pi05_full).
+policy_path: <path/to/pi05_checkpoint>/pretrained_model
+task: "Put the blood gas test tube in the o plate."
+device: cuda:1
+fps: 25
+control_time_s: 6000
+
+# π0.5 pays an extra subtask AR-decode when the subtask cache expires; keep prefetch runway.
+overlap_steps: 9
+num_inference_steps: 10
+# How often (s) π0.5 re-runs its high-level reasoning (subtask decode). 0 = every chunk.
+subtask_regeneration_interval: 10
+
+# torch.compile is off by default here (π0.5's subtask AR-decode + flow loop is a moving
+# target for the compiler). Enable once a stable graph is confirmed.
+compile_model: true
+compile_mode: max-autotune
+compile_cache_dir: torch_compile_cache/pi05
+
+# Camera keys (used by the optional live status view).
+camera_names: [observation.images.cam_top, observation.images.cam_left]
+
+# Output-side anti-jitter cross-fade (opt-in). RTC is intentionally unavailable for π0.5.
+smoothing:
+  enabled: true
+  latency_k: null
+  min_smooth_steps: 4
+  weight_profile: linear
+
+rate_limit:
+  enabled: true
+  max_step: 0.04
+  max_step_per_joint: null
+
+# Live OpenCV status window.
+enable_view: true
+view_bgr: true
+view_max_width: 1280

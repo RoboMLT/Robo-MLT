@@ -1,0 +1,107 @@
+# System-2 CompletionGate training — Task 2: blood sample tube sorting.
+#
+# Data: the `tube_sorting` subset of the released RoboMLT-Lab corpus.
+#   python -m high_level_model.training.train_competion_gate \
+#       configs/system2/train/completion_gate.yaml \
+#       dataset.repo_id=/abs/path/to/RoboMLT-Lab/tube_sorting
+#
+# Episode selection — two filters, both load-bearing:
+#   * max_episode_index: 303 — the release pads itself to 1000 episodes by duplicating takes
+#     (byte-identical copies, used as sample weighting). Only the first 303 indices are distinct
+#     recordings. Without this cut a val episode is routinely a copy of a train episode and the
+#     val metrics measure memorisation.
+#   * min_episode_len: 1000 — keep only the long-horizon *workflow* episodes (a full multi-cycle
+#     sorting procedure). 35 of the 303 distinct takes qualify; the rest are single-skill clips
+#     recorded to broaden state coverage, which carry at most one subtask boundary each.
+# Result: a 35-episode / ~55.9k-frame pool, split 28 train / 7 val.
+#
+# The back head gets NO supervision here: `back_event` is identically zero across this subset
+# (the induced-disturbance segments were only collected for blood gas analysis). lambda_back is
+# therefore 0 — weighting a loss whose labels are all-negative only teaches the head to output 0
+# while reporting a flatteringly low BCE. Deployment on this task runs advance-only; render the
+# demo video with --no_back_curve.
+
+# ── Dataset ──────────────────────────────────────────────────────────────────
+dataset:
+  repo_id: <path/to>/RoboMLT-Lab/tube_sorting
+  camera_names:               # this task is single-arm with two cameras (no cam_right)
+    - observation.images.cam_top
+    - observation.images.cam_left
+  max_episode_index: 303      # keep the distinct takes; drop the duplicated tail
+  min_episode_len: 1000       # long-horizon workflow episodes only -> 35 kept
+  include_back_episodes: false  # nothing to include: back_event is all-zero in this subset
+  back_from_column: true
+  # Video timestamps drift ~2e-4 s in the source captures; lerobot's 1e-4 default aborts the
+  # feature precompute with FrameTimestampError. 1e-2 = 1/4 frame @ 25 fps.
+  tolerance_s: 1.0e-2
+  val_repo_id: null           # single-dataset split (held-out episodes of repo_id)
+  val_episodes: null
+  train_ratio: 0.8            # 28 train / 7 val over the 35-episode pool
+  episode_subset_seed: 3      # fixes the split; leaves the 3597-frame multi-cycle take in val
+  history_len: 6              # M — multi-frame observation window (5 past + current)
+  prediction_offset: 0
+  history_skip_frame: 10      # deterministic / val stride
+  random_skip_range: 10       # Δ_max — train-time stride ~ U(1, Δ) per sample (anti-overfit)
+  max_episodes: null
+  use_command_in_meta: false
+  # Cross-checked against meta/subtasks at startup; warns on wording drift.
+  skill_library: configs/skill_library/bloodtube_sorting.yaml
+  back_annotations: null
+  min_segment_len: 0
+  # last N frames of each truly-completed segment = completion-head positives
+  completion_window: 50
+  completion_at_episode_end: true
+
+# ── Segment batch sampler (balances the rare positives per batch) ────────────
+sampler:
+  use_segment_sampler: true
+  segs_per_batch: 8
+  frames_per_seg: 8           # batch = 64
+
+# ── Model / backbone ─────────────────────────────────────────────────────────
+model:
+  freeze_siglip: true
+  temporal_layers: 2
+  temporal_heads: 8
+
+  # Cross-attention fusion of skill-text (query) over visual tokens (key/value) before the heads,
+  # instead of concatenating the two modalities. false → legacy concat (loads old checkpoints).
+  use_cross_attention: false
+  cross_attn_heads: 8
+
+# ── Optimizer ────────────────────────────────────────────────────────────────
+optimizer:
+  lr: 1.0e-4
+  weight_decay: 0.05
+
+# ── Loss weights (paper Eq. 7) ────────────────────────────────────────────────
+loss:
+  lambda_back: 0.0             # no back supervision in this subset — see the header note
+  lambda_completion: 1.0
+  back_pos_weight: null        # null -> auto-computed (w_b)
+  completion_pos_weight: null  # null -> auto-computed (w_c)
+
+# ── Feature / text-embedding cache (training-speed) ──────────────────────────
+cache:
+  features: true
+  text_embeddings: true
+  precompute_batch_size: 32
+  dir: outputs/feature_cache
+  reuse_disk: true
+
+# ── Weights & Biases (opt-in) ────────────────────────────────────────────────
+wandb:
+  enable: false
+  mode: offline           # online | offline | disabled
+  project: RoboMLT_system2
+  entity: ""              # "" → default entity
+  log_interval: 50        # upload train losses every N optimizer steps
+
+# ── Training loop ─────────────────────────────────────────────────────────────
+batch_size: 64
+num_workers: 4
+num_epochs: 30
+output_dir: outputs/completion_gate_tube_sorting
+run_name: null        # null → auto-built from config + timestamp
+gpu: 1
+save_interval: 0

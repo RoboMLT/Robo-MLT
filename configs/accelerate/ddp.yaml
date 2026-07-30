@@ -1,0 +1,13 @@
+# Accelerate launch config — multi-GPU DDP, bf16.
+# For cloud machines with enough per-GPU memory to hold the full model + optimizer states.
+#   accelerate launch --config_file configs/accelerate/ddp.yaml \
+#       -m low_level_model.training.train_system1 configs/system1/train/pi05.yaml
+# Override GPU count at launch:  accelerate launch --num_processes 4 --config_file ...
+compute_environment: LOCAL_MACHINE
+distributed_type: MULTI_GPU
+mixed_precision: bf16
+num_processes: 2
+num_machines: 1
+machine_rank: 0
+gpu_ids: all
+use_cpu: false

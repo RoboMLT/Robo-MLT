@@ -1,0 +1,41 @@
+# High-level task (see collection.yaml task_name):
+#   "pick up sodium citrate tubes and place in the orange plate, and then
+#    pick up routine blood tubes and place in the blue plate."
+# Keyboard shortcuts during inference / DAgger collection
+# (mirrors collection.yaml `subtasks`):
+#   1 -> grasp_routine_blood_tube
+#   2 -> grasp_sodium_citrate_tube
+#   3 -> place_to_orange_plate
+#   4 -> place_to_blue_plate
+#   5 -> return_home
+#   0 -> reset to the high-level task text
+skills:
+  - skill_id: grasp_routine_blood_tube
+    canonical_instruction: "grasp the routine blood tube."
+    precondition_text: "The gripper is empty and at least one routine blood tube remains on the rack"
+    postcondition_text: "The gripper is closed and holding a routine blood tube"
+    system1_policy_ref: "bloodtube_sorting/grasp_routine_blood_tube"
+
+  - skill_id: grasp_sodium_citrate_tube
+    canonical_instruction: "grasp the sodium citrate tube."
+    precondition_text: "The gripper is empty and at least one sodium citrate tube remains on the rack"
+    postcondition_text: "The gripper is closed and holding a sodium citrate tube"
+    system1_policy_ref: "bloodtube_sorting/grasp_sodium_citrate_tube"
+
+  - skill_id: place_to_orange_plate
+    canonical_instruction: "drop the tube into the orange plate."
+    precondition_text: "The gripper is holding a tube and the orange plate has free space"
+    postcondition_text: "The tube is released into the orange plate and the gripper is empty"
+    system1_policy_ref: "bloodtube_sorting/place_to_orange_plate"
+
+  - skill_id: place_to_blue_plate
+    canonical_instruction: "place to the blue plate."
+    precondition_text: "The gripper is holding a tube and the blue plate has free space"
+    postcondition_text: "The tube is released into the blue plate and the gripper is empty"
+    system1_policy_ref: "bloodtube_sorting/place_to_blue_plate"
+
+  - skill_id: return_home
+    canonical_instruction: "return to the home position."
+    precondition_text: "The gripper is empty after sorting all sample tubes"
+    postcondition_text: "The arm is back at the starting home pose"
+    system1_policy_ref: "bloodtube_sorting/return_home"
