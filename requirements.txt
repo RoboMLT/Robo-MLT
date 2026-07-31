@@ -5,10 +5,6 @@
 # (editable install) before running anything under low_level_model/robot/ or the dataset loaders.
 # System-2 planning/gate logic (high_level_model/planning, models/completion_gate.py) does not
 # need lerobot at all.
-#
-# Qwen3-VL (Robo-MLT's System 1, configs/system1/train/qwen3vl_vla.yaml) needs transformers>=4.57.
-# With an older transformers, point `policy.vlm_model_id` at a Qwen2.5-VL checkpoint instead (e.g.
-# Qwen/Qwen2.5-VL-3B-Instruct) — the backbone auto-selects the matching model class.
 
 torch>=2.4
 torchvision
