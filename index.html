@@ -309,7 +309,7 @@
             </p>
             <p>
               System&nbsp;2 tracks this plan with a multi-frame, dual-head execution monitor. A frozen SigLIP2 image
-              encoder and a temporal Transformer relate a six-frame observation history to the text of the active
+              encoder and a temporal Transformer relate a multi-frame observation history to the text of the active
               skill; two lightweight heads then read that shared representation. A <em>completion head</em> advances
               the plan pointer once the active skill finishes, while a <em>back head</em> detects when human
               intervention has left the workspace in a state from which that skill can no longer be completed. After
@@ -327,7 +327,7 @@
           </div>
 
           <div class="figure-block">
-            <img src="static/figures/system_framework.webp"
+            <img src="static/figures/system_framework.png"
                  alt="Overview of Robo-MLT: a frozen vision-language planner constructs an ordered sequence of atomic skills, System 2 tracks the plan with a dual-head execution monitor, and System 1 executes the active skill."/>
             <p class="figure-caption">
               <strong>Overview of Robo-MLT.</strong> A Qwen3.7-Max planner maps a user command, the
