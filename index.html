@@ -4,16 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
-  <title>Robo-MLT: A Dual-System Robotic Medical Laboratory Technologist</title>
-  <meta name="description" content="Robo-MLT is a protocol-grounded dual-system framework for long-horizon medical laboratory manipulation, pairing an explicit workflow monitor with a flow-matching action executor.">
-  <meta name="keywords" content="robot learning, vision-language-action, medical laboratory automation, long-horizon manipulation, flow matching, dual-system, bimanual manipulation">
+  <title>Robo-MLT: A Dual-System Robotic Medical Laboratory Technologist for Generative Long-Horizon Manipulation</title>
+  <meta name="description" content="Robo-MLT is a protocol-grounded dual-system framework that separates explicit workflow monitoring from continuous action generation for long-horizon medical laboratory manipulation.">
+  <meta name="keywords" content="medical robots and systems, bimanual manipulation, dual-system framework, vision-language-action models">
   <meta name="robots" content="index, follow">
 
   <meta property="og:type" content="article">
   <meta property="og:title" content="Robo-MLT: A Dual-System Robotic Medical Laboratory Technologist for Generative Long-Horizon Manipulation">
-  <meta property="og:description" content="A protocol-grounded dual-system framework for long-horizon medical laboratory manipulation.">
+  <meta property="og:description" content="Robo-MLT is a protocol-grounded dual-system framework that separates explicit workflow monitoring from continuous action generation for long-horizon medical laboratory manipulation.">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Robo-MLT: A Dual-System Robotic Medical Laboratory Technologist">
+  <meta name="twitter:title" content="Robo-MLT: A Dual-System Robotic Medical Laboratory Technologist for Generative Long-Horizon Manipulation">
+  <meta name="twitter:description" content="Robo-MLT is a protocol-grounded dual-system framework that separates explicit workflow monitoring from continuous action generation for long-horizon medical laboratory manipulation.">
 
   <link rel="stylesheet" href="static/css/bulma.min.css">
   <link rel="stylesheet" href="static/css/index.css">
@@ -100,6 +101,67 @@
 
     .button[aria-disabled="true"] { opacity: 0.75; cursor: not-allowed; }
 
+    /* Result tables. Kept outside `.content` so Bulma's table rules do not
+       fight these; wide tables scroll inside their own box. */
+    .table-wrap { overflow-x: auto; max-width: 100%; margin-top: 1.25rem; }
+    table.results-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.92rem;
+      background: var(--background-primary, #fff);
+      border-radius: var(--border-radius, 12px);
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+    }
+    table.results-table th,
+    table.results-table td {
+      padding: 0.55rem 0.75rem;
+      text-align: center;
+      white-space: nowrap;
+      border-bottom: 1px solid var(--border-color, #e2e8f0);
+    }
+    table.results-table th { font-weight: 700; color: var(--text-primary, #1e293b); }
+    table.results-table thead th { background: var(--background-accent, #f1f5f9); }
+    table.results-table th:first-child,
+    table.results-table td:first-child { text-align: left; white-space: normal; }
+    table.results-table tbody tr.group-start td { border-top: 2px solid var(--border-color, #e2e8f0); }
+    table.results-table tbody tr.is-ours { background: rgba(37, 99, 235, 0.07); }
+    table.results-table tbody tr.is-ours td { font-weight: 700; color: var(--text-primary, #1e293b); }
+    .table-note {
+      font-size: 0.88rem;
+      color: var(--text-secondary, #64748b);
+      line-height: 1.55;
+      margin-top: 0.75rem;
+    }
+
+    /* Runtime numbers as compact stat cards. */
+    .runtime-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+      gap: 0.9rem;
+      margin-top: 1.5rem;
+    }
+    .runtime-card {
+      background: var(--background-primary, #fff);
+      border: 1px solid var(--border-color, #e2e8f0);
+      border-radius: var(--border-radius, 12px);
+      box-shadow: var(--shadow-sm);
+      padding: 1rem 0.75rem;
+      text-align: center;
+    }
+    .runtime-card .value {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: var(--primary-color, #2563eb);
+      line-height: 1.2;
+    }
+    .runtime-card .label {
+      font-size: 0.8rem;
+      color: var(--text-secondary, #64748b);
+      line-height: 1.4;
+      margin-top: 0.35rem;
+    }
+
     /* The BibTeX block has long unbreakable lines. Constrain the whole
        chain so it scrolls inside its own box instead of widening the page. */
     .bibtex-header { flex-wrap: wrap; gap: 0.5rem; max-width: 100%; }
@@ -148,7 +210,7 @@
                 </a>
               </span>
               <span class="link-block">
-                <a href="https://github.com/RoboMLT/Robo-MLT/tree/main"
+                <a href="https://github.com/SkyLineHXY/Robo-MLT/tree/main"
                    target="_blank" rel="noopener"
                    title="Robo-MLT code on GitHub"
                    class="external-link button is-normal is-rounded is-dark">
@@ -187,8 +249,9 @@
         </div>
         <p class="figure-caption has-text-centered" style="text-align:center;">
           Uncut real-world execution of Robo-MLT on the Agilex dual-arm Static-Aloha platform, including the
-          workflow-interruption scenario in which an operator removes the in-hand sample and System&nbsp;2
-          recovers through protocol-constrained replanning.
+          workflow-interruption scenario in which an operator removes the in-hand sample. The back head detects that
+          the active skill can no longer be carried out, System&nbsp;2 returns <code>RECOVER</code>, and the bounded,
+          protocol-constrained replanner revises the forward plan.
         </p>
       </div>
     </div>
@@ -202,23 +265,23 @@
           <h2 class="title is-3">Abstract</h2>
           <div class="content has-text-justified">
             <p>
-              Medical laboratory robots must perform contact-rich manipulation while preserving the action order
+              Medical laboratory robots must execute contact-rich manipulation while preserving the action order
               prescribed by operating protocols. End-to-end imitation-learning and vision&ndash;language&ndash;action
-              policies may confuse visually similar workflow stages, producing stage-inconsistent actions over a
-              long horizon. We present <strong>Robo-MLT</strong>, a protocol-grounded dual-system framework that
+              policies may confuse visually similar workflow stages, yielding stage-inconsistent actions over long
+              horizons. We present <strong>Robo-MLT</strong>, a protocol-grounded dual-system framework that
               separates explicit workflow monitoring from continuous action generation. A frozen
-              vision&ndash;language planner reads an initial observation and instantiates an ordered sequence over an
+              vision&ndash;language planner uses an initial observation to instantiate an ordered sequence over an
               atomic-skill library. A lightweight execution monitor then tracks progress with two heads: a
-              <em>completion head</em> advances a plan pointer once the active skill has completed, while a
-              <em>back head</em> recognizes when human intervention has left the workspace in a state from which that
-              skill can no longer be carried out, and triggers bounded, protocol-constrained replanning. Conditioned
+              <em>completion head</em> advances a plan pointer once the active skill finishes, while a
+              <em>back head</em> detects when human intervention leaves the workspace in a state from which that
+              skill can no longer be completed and triggers bounded, protocol-constrained replanning. Conditioned
               on the active skill, a Qwen3-VL-based flow-matching executor generates action chunks that an
               asynchronous runtime streams to the robot at the control-loop rate. Across 20 paired configurations on
               blood gas analysis and blood sample tube sorting, Robo-MLT carries more samples through their full
-              workflow than four learning-based baselines, improves end-to-end task success by 15 percentage points
-              over the strongest hierarchical baseline &pi;<sub>0.5</sub> on both tasks, and recovers from
-              mid-procedure interruptions that leave a fixed-program pipeline stuck.
-            </p>
+              workflow than four learning-based baselines and raises end-to-end task success rate by 15 percentage
+              points over the strongest hierarchical baseline &pi;<sub>0.5</sub> on both tasks. It also recovers from
+              operator intervention during execution and re-targets a sample displaced after the arm begins its
+              approach, whereas a fixed-program pipeline fails to grasp the displaced target.
             </p>
           </div>
         </div>
@@ -238,27 +301,40 @@
               Robo-MLT comprises two coupled components: <strong>System&nbsp;2</strong>, a low-frequency semantic
               reasoner that monitors execution and maintains the active atomic skill, and
               <strong>System&nbsp;1</strong>, a high-frequency generative executor that maps the active skill to
-              continuous actions. A frozen vision&ndash;language planner initializes an ordered sequence over a
-              declarative atomic-skill library. System&nbsp;2 tracks this plan with a multi-frame, dual-head execution
-              monitor. A completion head advances the plan pointer once the active skill has completed, while a back
-              head recognizes when human intervention has left the workspace in a state from which that skill can no
-              longer be carried out and triggers bounded, protocol-constrained replanning. System&nbsp;1 executes the
-              active skill with a Qwen3-VL-conditioned controller and a flow-matching action head. An asynchronous
-              runtime coordinates the two systems: System&nbsp;2 updates at 0.22&nbsp;Hz while System&nbsp;1 streams
-              actions at the 20&nbsp;Hz control-loop rate.
+              continuous actions. A Qwen3.7-Max planner, queried zero-shot through a public API, reads the
+              task instruction, the instrument protocol, and an initial observation of the workspace, and composes an
+              ordered sequence over a declarative atomic-skill library &mdash; seven skills for blood gas analysis and
+              five for tube sorting. Because the plan is instantiated from the observed scene, the planner expands
+              the sequence to the tubes actually present and commits to a feasible order without any gradient update.
+            </p>
+            <p>
+              System&nbsp;2 tracks this plan with a multi-frame, dual-head execution monitor. A frozen SigLIP2 image
+              encoder and a temporal Transformer relate a six-frame observation history to the text of the active
+              skill; two lightweight heads then read that shared representation. A <em>completion head</em> advances
+              the plan pointer once the active skill finishes, while a <em>back head</em> detects when human
+              intervention has left the workspace in a state from which that skill can no longer be completed. After
+              temporal debouncing, the monitor returns one of <code>STAY</code>, <code>ADVANCE</code>, or
+              <code>RECOVER</code>; <code>RECOVER</code> hands control to a replanner bounded by a per-episode call
+              budget and by hard protocol constraints that reject orderings the procedure forbids. A per-skill stall
+              timeout triggers the same path when the completion head never confirms a skill as finished.
+            </p>
+            <p>
+              System&nbsp;1 executes the active skill with a Qwen3-VL-conditioned controller and a flow-matching
+              action head that generates 30-step action chunks. An asynchronous runtime coordinates the two systems:
+              System&nbsp;2 updates at 1.33&nbsp;Hz on a background worker, while System&nbsp;1 prefetches and blends
+              successive chunks so the controller holds its nominal 20&nbsp;Hz control-loop rate.
             </p>
           </div>
 
           <div class="figure-block">
             <img src="static/figures/system_framework.webp"
-                 alt="Overview of the Robo-MLT framework: a frozen vision-language planner feeds an ordered skill sequence to System 2, which tracks the plan and conditions System 1's flow-matching executor."/>
+                 alt="Overview of Robo-MLT: a frozen vision-language planner constructs an ordered sequence of atomic skills, System 2 tracks the plan with a dual-head execution monitor, and System 1 executes the active skill."/>
             <p class="figure-caption">
-              <strong>Overview of Robo-MLT.</strong> A frozen vision&ndash;language planner maps a user command, the
+              <strong>Overview of Robo-MLT.</strong> A Qwen3.7-Max planner maps a user command, the
               corresponding instrument protocol, and an initial scene observation to an ordered sequence of atomic
-              skills. System&nbsp;2 tracks this plan with a dual-head execution monitor and invokes
+              skills. System&nbsp;2 tracks this plan with a dual-head execution monitor and invokes bounded,
               protocol-constrained replanning when human intervention disrupts the active skill.
-              System&nbsp;1 executes the active skill with a Qwen3-VL-conditioned controller and a flow-matching
-              action head.
+              System&nbsp;1 executes the active skill with a Qwen3-VL-conditioned flow-matching policy.
             </p>
           </div>
         </div>
@@ -276,18 +352,19 @@
             <ol class="contribution-list">
               <li>
                 We propose <strong>Robo-MLT</strong>, a hierarchical framework that separates explicit, low-frequency
-                workflow monitoring from high-frequency generative control for long-horizon, fine-grained medical
-                laboratory manipulation.
+                workflow monitoring from high-frequency generative control for long-horizon medical laboratory
+                manipulation.
               </li>
               <li>
-                We develop a lightweight, multi-frame <strong>execution monitor</strong> that maintains an explicit
-                representation of workflow progress, with two decision heads that determine when the active skill has
-                completed and when human intervention should trigger replanning of the remaining plan.
+                We develop a lightweight, multi-frame <strong>execution monitor</strong> whose two decision heads
+                determine when the active skill has completed and when human intervention should trigger replanning
+                of the remaining plan.
               </li>
               <li>
-                We evaluate Robo-MLT on two <strong>real-world medical laboratory tasks</strong> against IL, VLA, and
-                conventional fixed-program baselines, reporting task success, per-sample completion, disturbance
-                response, and runtime cost.
+                We evaluate Robo-MLT on two <strong>real-world medical laboratory tasks</strong>, reaching end-to-end
+                success rates of <strong>85%</strong> and <strong>75%</strong> and sample completion rates of
+                <strong>92.50%</strong> and <strong>94.38%</strong>, which raises the average success rate by
+                15 points over &pi;<sub>0.5</sub>.
               </li>
             </ol>
           </div>
@@ -301,8 +378,17 @@
     <div class="container is-max-desktop">
       <h2 class="title is-3 has-text-centered">Experiment Demonstrations</h2>
 
+      <div class="content has-text-justified">
+        <p>
+          The paper evaluates two disturbance types separately. Moving the target during an isolated
+          <em>grasp tube from rack</em> skill tests closed-loop re-targeting by the learned executor. Removing the
+          in-hand sample during the blood gas workflow, shown in the rollout above, instead tests the back head,
+          <code>RECOVER</code>, and bounded, protocol-constrained replanning by System&nbsp;2.
+        </p>
+      </div>
+
       <!-- Disturbance grasp: fixed-program vs. ours (routine blood tube) -->
-      <h3 class="title is-5 has-text-centered" style="margin-top:0.5rem;">Reacting to a mid-task disturbance</h3>
+      <h3 class="title is-5 has-text-centered" style="margin-top:0.5rem;">Target movement during an isolated grasp skill</h3>
       <div class="columns is-variable is-6">
         <div class="column">
           <div class="publication-video">
@@ -313,8 +399,10 @@
             </video>
           </div>
           <p class="figure-caption">
-            <strong>Fixed-program pipeline.</strong> Senses the tube once, then moves open-loop; when it is
-            shifted mid-motion, the arm closes on the empty slot.
+            <strong>Fixed-Program.</strong> This is a single-skill baseline for the disturbance study, not a complete
+            long-horizon task baseline. It localizes the target tube in the initial frame, selects the corresponding
+            pre-calibrated waypoint, and executes an approach&ndash;grasp&ndash;lift sequence in open loop. It succeeds
+            in 20/20 static trials for each tube category, but in 0/20 disturbed trials for each category.
           </p>
         </div>
         <div class="column">
@@ -326,14 +414,17 @@
             </video>
           </div>
           <p class="figure-caption">
-            <strong>Robo-MLT (ours).</strong> Closed-loop control re-targets to the tube's new position and
-            completes the grasp.
+            <strong>Robo-MLT (ours).</strong> The closed-loop learned executor re-targets and grasps the moved tube.
+            Both &pi;<sub>0</sub> and Robo-MLT succeed in 20/20 static and 20/20 disturbed trials for each tube
+            category. The comparison therefore isolates closed-loop re-targeting relative to a sense-once
+            pre-programmed trajectory; it does not distinguish &pi;<sub>0</sub> from Robo-MLT or establish an
+            advantage of System&nbsp;2.
           </p>
         </div>
       </div>
 
       <!-- Perceptual aliasing: repeated docking -->
-      <h3 class="title is-5 has-text-centered" style="margin-top:1.5rem;">Repeated docking under perceptual aliasing</h3>
+      <h3 class="title is-5 has-text-centered" style="margin-top:1.5rem;">Stage-confusion error under perceptual aliasing</h3>
       <div class="publication-video">
         <video controls preload="metadata" playsinline>
           <source src="static/videos/end_to_end_failure.mp4" type="video/mp4">
@@ -342,8 +433,11 @@
         </video>
       </div>
       <p class="figure-caption has-text-centered" style="text-align:center;">
-        <strong>End-to-end IL/VLA.</strong> Insertion and withdrawal look alike at the inlet, so the policy
-        re-issues the docking action instead of withdrawing, and the procedure stalls.
+        <strong>Representative perceptual-aliasing failure of end-to-end IL and VLA baselines.</strong> At the
+        instrument-docking stage, the observation just after insertion and the observation just before withdrawal are
+        nearly identical. Lacking an explicit representation of workflow progress, the baseline policy re-issues the
+        insertion (docking) action instead of executing the withdrawal that the protocol requires next, so the tube is
+        pushed back toward the inlet and the procedure stalls.
       </p>
     </div>
   </section>
