@@ -435,9 +435,10 @@
       <p class="figure-caption has-text-centered" style="text-align:center;">
         <strong>Representative perceptual-aliasing failure of end-to-end IL and VLA baselines.</strong> At the
         instrument-docking stage, the observation just after insertion and the observation just before withdrawal are
-        nearly identical. Lacking an explicit representation of workflow progress, the baseline policy re-issues the
-        insertion (docking) action instead of executing the withdrawal that the protocol requires next, so the tube is
-        pushed back toward the inlet and the procedure stalls.
+        nearly identical. The protocol requires the tube to be discarded once it has been withdrawn, but a policy
+        without an explicit representation of workflow progress cannot tell that the assay is already done: after
+        withdrawing the tube it inserts it again, then withdraws it again, cycling between the two stages instead of
+        advancing to disposal.
       </p>
     </div>
   </section>
