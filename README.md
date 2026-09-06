@@ -12,23 +12,6 @@ tube sorting), five System-1 VLA policies, and the System-2 planner + completion
 controller.
 
 
-## Method → Code Map
-
-| Paper concept | Code |
-|---|---|
-| Atomic-skill library $\mathcal{S}$ | `configs/skill_library/*.yaml`, loaded by `high_level_model/planning/skill_library.py` |
-| Frozen planner $\Phi_{\mathrm{plan}}$ / replanner $\Phi_{\mathrm{replan}}$ | `high_level_model/planning/planner.py` (`Planner.plan` / `Planner.replan`), backed by `llm_backends.py` |
-| Planner prompts | `configs/skill_library/prompts/*.yaml`, loaded by `planning/prompt_templates.py` |
-| Frozen SigLIP2 image/text encoders $f_\phi$ / $h_\theta$ | `high_level_model/models/siglip_encoder.py::SigLIPFrameEncoder` |
-| Temporal encoder $g_\psi$ (Eq. 3) | `high_level_model/models/completion_gate.py::CausalTemporalEncoder` |
-| Completion head $\gamma_t$ / back head $\beta_t$ (Eq. 4-5) | `CompletionGate.completion_head` / `.back_head`, trained by `high_level_model/training/train_competion_gate.py` |
-| Pointer controller {stay, advance, recover} | `high_level_model/planning/system2_pipeline.py::System2Pipeline.step` |
-| System-2 objective (Eq. 7) | `train_competion_gate.py::run_epoch` (weighted BCE, `loss.lambda_back` / `loss.lambda_completion`) |
-| System 1 (Qwen3-VL + flow matching) | `low_level_model/models/qwen3vl_vla/` |
-| Flow-matching objective (Eq. 8-9) | `qwen3vl_vla/modeling_qwen3vl_vla.py` |
-| Algorithm 1 (asynchronous dual-system runtime) | `low_level_model/robot/robot_inference.py` (`System2Controller`, `run_loop`) + `low_level_model/runtime/inference_system1.py::System1AsyncStreamer` |
-| Inter-chunk blend window $w$ | `low_level_model/runtime/action_smoothing.py::TemporalChunkBlender` |
-
 ## Repository Layout
 
 ```
@@ -145,26 +128,6 @@ python -m low_level_model.robot.robot_inference_pi05 configs/system1/inference/i
 # DAgger data collection (teleop takeover + subtask labelling)
 python -m low_level_model.robot.collect_dagger_dataset configs/system1/inference/collect_dagger.yaml
 ```
-
-## Hyperparameters
-
-Table `tab:hyperparams` of the paper, with the config key that sets each value:
-
-| Symbol | Meaning | Paper value | Config key | File |
-|---|---|---|---|---|
-| $f_{\mathrm{ctrl}}$ | control-loop rate | 20 Hz | `fps` | `configs/system1/inference/inference.yaml` |
-| $N$ | action-chunk length | 30 | `policy.chunk_size` / `n_action_steps` | `configs/system1/train/qwen3vl_vla.yaml` |
-| $r$ | chunk prefetch overlap | 8 | `overlap_steps` | `inference.yaml` |
-| $w$ | inter-chunk blend window | 4 | `smoothing.min_smooth_steps` | `inference.yaml` |
-| $K$ | System-2 frame-sampling interval | 15 | `sampling_interval` | `inference.yaml` |
-| $M$ | history-window length | 6 | `dataset.history_len` | `configs/system2/train/completion_gate*.yaml` |
-| $\Delta_{\max}$ | max random training stride | 10 | `dataset.random_skip_range` | `completion_gate*.yaml` |
-| $\tau_{\mathrm{done}} / k_a$ | advance threshold / debounce | 0.6 / 2 | `pipeline.tau_done` / `k_a` | `inference.yaml` |
-| $\tau_{\mathrm{back}} / k_b$ | recover threshold / debounce | 0.8 / 3 | `pipeline.tau_back` / `k_b` | `inference.yaml` |
-| $\Delta_{\mathrm{cd}}$ | switch cooldown (ticks) | 10 | `pipeline.cooldown` | `inference.yaml` |
-| — | max LLM replans per episode | 3 | `pipeline.replan_budget` | `inference.yaml` |
-| $\lambda_b, \lambda_c$ | back / completion loss weights (Eq. 7) | — | `loss.lambda_back` / `loss.lambda_completion` | `completion_gate*.yaml` |
-| $w_b, w_c$ | positive-class up-weights (Eq. 7) | >1 | `loss.back_pos_weight` / `loss.completion_pos_weight` (`null` = auto) | `completion_gate*.yaml` |
 
 ## Limitations
 
