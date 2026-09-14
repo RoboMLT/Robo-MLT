@@ -93,7 +93,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 1rem;
+      gap: 0.72rem;
     }
 
     .page-brand {
@@ -203,23 +203,23 @@
       display: inline-flex;
       align-items: center;
       gap: 0.45rem;
-      padding: 0.42rem 0.9rem;
+      padding: 0.38rem 0.8rem;
       border-radius: 999px;
-      background: rgba(255,255,255,.9);
-      border: 1px solid var(--border-strong);
-      box-shadow: var(--shadow-sm);
+      background: rgba(49, 87, 213, 0.06);
+      border: 1px solid rgba(49, 87, 213, 0.14);
+      box-shadow: none;
       color: var(--text-secondary);
-      font-size: 0.82rem;
+      font-size: 0.78rem;
       font-weight: 750;
       letter-spacing: 0.025em;
     }
     .status-tag::before {
       content: "";
-      width: 0.48rem;
-      height: 0.48rem;
+      width: 0.42rem;
+      height: 0.42rem;
       border-radius: 50%;
-      background: #f59e0b;
-      box-shadow: 0 0 0 4px rgba(245,158,11,.12);
+      background: #64748b;
+      box-shadow: none;
     }
 
     .publication-links {
@@ -276,14 +276,14 @@
       font-size: clamp(1.8rem, 3.3vw, 2.45rem);
       letter-spacing: -0.035em;
       line-height: 1.15;
-      margin-bottom: 2rem;
+      margin-bottom: 1.4rem;
     }
     section .title.is-3::after {
       content: "";
       display: block;
       width: 46px;
       height: 4px;
-      margin: 0.7rem auto 0;
+      margin: 0.5rem auto 0;
       border-radius: 999px;
       background: linear-gradient(90deg, var(--primary-color), var(--accent-color));
     }
@@ -300,7 +300,8 @@
       font-size: 1.04rem;
       line-height: 1.82;
     }
-    .content p { margin-bottom: 1.2em; }
+    .content p { margin-bottom: 1em; }
+    .content p:last-child { margin-bottom: 0; }
     .content strong { color: var(--text-primary); }
 
     #abstract .column.is-four-fifths,
@@ -309,7 +310,7 @@
       border: 1px solid rgba(214,222,234,.85);
       border-radius: var(--border-radius-lg);
       box-shadow: var(--shadow-md);
-      padding: clamp(2rem, 5vw, 3.3rem);
+      padding: clamp(1.7rem, 3.5vw, 2.4rem);
     }
 
     .publication-video {
@@ -347,7 +348,7 @@
     }
 
     .figure-block {
-      margin: 2.4rem 0 0.5rem;
+      margin: 1.6rem 0 0.5rem;
       padding: clamp(0.65rem, 1.4vw, 1rem);
       border-radius: var(--border-radius-lg);
       background: #fff;
@@ -379,7 +380,7 @@
     }
     .contribution-list li {
       position: relative;
-      padding: 1.1rem 1.15rem 1.1rem 3.75rem;
+      padding: 0.95rem 1rem 0.95rem 3.55rem;
       margin: 0;
       line-height: 1.68;
       counter-increment: contrib;
@@ -392,7 +393,7 @@
       content: counter(contrib);
       position: absolute;
       left: 1rem;
-      top: 1.05rem;
+      top: 0.92rem;
       width: 2rem;
       height: 2rem;
       border-radius: 10px;
@@ -407,7 +408,7 @@
     }
 
     #experiments .content { max-width: 900px; margin-left: auto; margin-right: auto; }
-    #experiments .title.is-5 { margin-top: 2.4rem !important; margin-bottom: 1.2rem; }
+    #experiments .title.is-5 { margin-top: 1.8rem !important; margin-bottom: 1rem; }
     #experiments .columns.is-variable > .column {
       display: flex;
       flex-direction: column;
@@ -561,9 +562,27 @@
       .page-nav-links a { font-size: 0.8rem; padding: 0.44rem 0.55rem; }
       #main-content > .hero:first-of-type .hero-body { padding-left: 1rem; padding-right: 1rem; }
       .publication-title { letter-spacing: -0.04em !important; }
-      section.section, section.hero.teaser .hero-body { padding-left: 1rem; padding-right: 1rem; }
-      section.hero.is-light .container { padding-left: 1rem; padding-right: 1rem; }
-      #abstract .column.is-four-fifths, #contributions .column.is-four-fifths { padding: 1.4rem; }
+      section.section,
+      section.hero.teaser .hero-body {
+        padding: 2.2rem 1rem;
+      }
+
+      section.hero.is-light .container {
+        padding: 2.2rem 1rem;
+      }
+
+      #abstract .column.is-four-fifths,
+      #contributions .column.is-four-fifths {
+        padding: 1.25rem;
+      }
+
+      section .title.is-3 {
+        margin-bottom: 1.1rem;
+      }
+
+      .figure-block {
+        margin-top: 1.2rem;
+      }
       .content { font-size: 0.98rem; line-height: 1.72; }
       .figure-caption { font-size: 0.86rem; }
       .publication-links .button { min-width: 102px; height: 2.7rem; }
@@ -617,7 +636,7 @@
             </div>
 
             <div style="margin-bottom:1.5rem;">
-              <span class="status-tag">Paper under review</span>
+              <span class="status-tag">Under Review</span>
             </div>
 
             <div class="publication-links">
