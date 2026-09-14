@@ -261,12 +261,13 @@
       position: relative;
     }
 
-    section.section { padding: clamp(4.2rem, 7vw, 6.5rem) 1.5rem; }
-    section.hero.teaser .hero-body { padding: clamp(4rem, 7vw, 6rem) 1.5rem; }
-    section.hero.is-light {
-      background: linear-gradient(180deg, #f3f6fb 0%, #f7f9fc 100%) !important;
-      border-top: 1px solid var(--border-color);
-      border-bottom: 1px solid var(--border-color);
+    section.section {
+      padding: clamp(2.8rem, 5vw, 4.2rem) 1.5rem;
+    }
+    section.hero.teaser .hero-body { padding: clamp(2.8rem, 5vw, 4rem) 1.5rem; }
+    section.hero.is-light .container {
+      padding-top: clamp(2.8rem, 5vw, 4rem);
+      padding-bottom: clamp(2.8rem, 5vw, 4rem);
     }
     section.hero.is-light .container { padding-top: clamp(4rem, 7vw, 6rem); padding-bottom: clamp(4rem, 7vw, 6rem); }
 
