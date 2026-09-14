@@ -40,6 +40,7 @@
       --border-radius: 16px;
       --border-radius-lg: 24px;
       --content-width: 1152px;
+      --section-y: clamp(2.2rem, 3.6vw, 3.1rem);
     }
 
     html {
@@ -179,7 +180,7 @@
     }
 
     #main-content > .hero:first-of-type .hero-body {
-      padding: clamp(4.2rem, 9vw, 7.5rem) 1.5rem clamp(3.7rem, 7vw, 6rem);
+      padding: clamp(3.4rem, 7vw, 5.6rem) 1.5rem clamp(2.4rem, 4.5vw, 3.4rem);
     }
 
     .publication-title {
@@ -261,22 +262,17 @@
       position: relative;
     }
 
-    section.section {
-      padding: clamp(2.8rem, 5vw, 4.2rem) 1.5rem;
-    }
-    section.hero.teaser .hero-body { padding: clamp(2.8rem, 5vw, 4rem) 1.5rem; }
-    section.hero.is-light .container {
-      padding-top: clamp(2.8rem, 5vw, 4rem);
-      padding-bottom: clamp(2.8rem, 5vw, 4rem);
-    }
-    section.hero.is-light .container { padding-top: clamp(4rem, 7vw, 6rem); padding-bottom: clamp(4rem, 7vw, 6rem); }
+    section.section { padding: var(--section-y) 1.5rem; }
+    section.hero.teaser .hero-body { padding: var(--section-y) 1.5rem; }
+    /* is-light sections already carry section padding; the container must not add it again. */
+    section.hero.is-light .container { padding-top: 0; padding-bottom: 0; }
 
     section .title.is-3 {
       color: var(--text-primary);
       font-size: clamp(1.8rem, 3.3vw, 2.45rem);
       letter-spacing: -0.035em;
       line-height: 1.15;
-      margin-bottom: 1.4rem;
+      margin-bottom: 1.2rem;
     }
     section .title.is-3::after {
       content: "";
@@ -341,11 +337,21 @@
 
     #real-world-rollout .container {
       position: relative;
+      max-width: min(1100px, calc(100vw - 3rem));
     }
     #real-world-rollout .publication-video {
       max-width: 1040px;
       margin: 0 auto;
     }
+
+    /* The method figure breaks out of the prose measure to use the full diagram resolution. */
+    #method .container { max-width: min(1240px, calc(100vw - 3rem)); }
+    #method .content {
+      max-width: 860px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    #method .figure-block { margin-top: 2rem; }
 
     .figure-block {
       margin: 1.6rem 0 0.5rem;
@@ -419,6 +425,19 @@
       flex: 1;
       margin: 0.8rem 0 0;
       padding: 0 0.2rem;
+    }
+
+    /* Multi-panel rollout videos are ultrawide (up to 5.3:1) and break out of the text container. */
+    #experiments .video-wide {
+      width: min(1280px, calc(100vw - 3rem));
+      margin-left: 50%;
+      margin-top: 1.2rem;
+      transform: translateX(-50%);
+    }
+    #experiments .video-wide + .video-wide { margin-top: 2rem; }
+    #experiments .video-wide .figure-caption {
+      max-width: 1000px;
+      margin: 0.9rem auto 0;
     }
 
     .table-wrap {
@@ -564,11 +583,11 @@
       .publication-title { letter-spacing: -0.04em !important; }
       section.section,
       section.hero.teaser .hero-body {
-        padding: 2.2rem 1rem;
+        padding: 2rem 1rem;
       }
 
       section.hero.is-light .container {
-        padding: 2.2rem 1rem;
+        padding: 0;
       }
 
       #abstract .column.is-four-fifths,
@@ -724,44 +743,40 @@
   <!-- ===================== METHOD OVERVIEW ===================== -->
   <section class="section" id="method">
     <div class="container is-max-desktop">
-      <div class="columns is-centered">
-        <div class="column is-four-fifths">
-          <h2 class="title is-3 has-text-centered">Method Overview</h2>
+      <h2 class="title is-3 has-text-centered">Method Overview</h2>
 
-          <div class="content has-text-justified">
-            <p>
-              Robo-MLT couples <strong>System&nbsp;2</strong>, a low-frequency semantic reasoner that tracks the
-              active atomic skill, with <strong>System&nbsp;1</strong>, a high-frequency generative executor that maps
-              that skill to continuous actions. A zero-shot Qwen3.7-Max planner reads the task instruction, instrument
-              protocol, and initial workspace observation to compose an ordered sequence over a declarative skill
-              library &mdash; seven skills for blood gas analysis and five for tube sorting. The plan is instantiated
-              directly from the observed scene without gradient updates.
-            </p>
-            <p>
-              System&nbsp;2 uses a multi-frame dual-head execution monitor built on a frozen SigLIP2 image encoder
-              and temporal Transformer. A <em>completion head</em> advances the plan when the active skill finishes,
-              while a <em>back head</em> detects intervention-induced states from which that skill can no longer be
-              completed. After temporal debouncing, the monitor returns <code>STAY</code>, <code>ADVANCE</code>, or
-              <code>RECOVER</code>. Recovery invokes a replanner constrained by a call budget and hard protocol rules;
-              a per-skill stall timeout can trigger the same path.
-            </p>
-            <p>
-              System&nbsp;1 executes the active skill with a Qwen3-VL-conditioned controller and flow-matching action
-              head that generates 30-step chunks. An asynchronous runtime lets System&nbsp;2 update at 1.33&nbsp;Hz while
-              System&nbsp;1 prefetches and blends chunks to maintain the nominal 20&nbsp;Hz control loop.
-            </p>
-          </div>
+      <div class="content has-text-justified">
+        <p>
+          Robo-MLT couples <strong>System&nbsp;2</strong>, a low-frequency semantic reasoner that tracks the
+          active atomic skill, with <strong>System&nbsp;1</strong>, a high-frequency generative executor that maps
+          that skill to continuous actions. A zero-shot Qwen3.7-Max planner reads the task instruction, instrument
+          protocol, and initial workspace observation to compose an ordered sequence over a declarative skill
+          library &mdash; seven skills for blood gas analysis and five for tube sorting. The plan is instantiated
+          directly from the observed scene without gradient updates.
+        </p>
+        <p>
+          System&nbsp;2 uses a multi-frame dual-head execution monitor built on a frozen SigLIP2 image encoder
+          and temporal Transformer. A <em>completion head</em> advances the plan when the active skill finishes,
+          while a <em>back head</em> detects intervention-induced states from which that skill can no longer be
+          completed. After temporal debouncing, the monitor returns <code>STAY</code>, <code>ADVANCE</code>, or
+          <code>RECOVER</code>. Recovery invokes a replanner constrained by a call budget and hard protocol rules;
+          a per-skill stall timeout can trigger the same path.
+        </p>
+        <p>
+          System&nbsp;1 executes the active skill with a Qwen3-VL-conditioned controller and flow-matching action
+          head that generates 30-step chunks. An asynchronous runtime lets System&nbsp;2 update at 1.33&nbsp;Hz while
+          System&nbsp;1 prefetches and blends chunks to maintain the nominal 20&nbsp;Hz control loop.
+        </p>
+      </div>
 
-          <div class="figure-block">
-            <img src="static/figures/system_framework.png"
-                 alt="Overview of Robo-MLT: a frozen vision-language planner constructs an ordered sequence of atomic skills, System 2 tracks the plan with a dual-head execution monitor, and System 1 executes the active skill."/>
-            <p class="figure-caption">
-              <strong>Overview of Robo-MLT.</strong> A Qwen3.7-Max planner creates an ordered atomic-skill sequence.
-              System&nbsp;2 monitors progress and triggers bounded, protocol-constrained replanning when needed, while
-              System&nbsp;1 executes the active skill with a Qwen3-VL-conditioned flow-matching policy.
-            </p>
-          </div>
-        </div>
+      <div class="figure-block">
+        <img src="static/figures/system_framework.png"
+             alt="Overview of Robo-MLT: a frozen vision-language planner constructs an ordered sequence of atomic skills, System 2 tracks the plan with a dual-head execution monitor, and System 1 executes the active skill."/>
+        <p class="figure-caption">
+          <strong>Overview of Robo-MLT.</strong> A Qwen3.7-Max planner creates an ordered atomic-skill sequence.
+          System&nbsp;2 monitors progress and triggers bounded, protocol-constrained replanning when needed, while
+          System&nbsp;1 executes the active skill with a Qwen3-VL-conditioned flow-matching policy.
+        </p>
       </div>
     </div>
   </section>
@@ -799,6 +814,54 @@
     <div class="container is-max-desktop">
       <h2 class="title is-3 has-text-centered">Experiment Demonstrations</h2>
 
+      <!-- Full rollouts with System 2 telemetry overlaid -->
+      <h3 class="title is-5 has-text-centered" style="margin-top:0.5rem;">Plan progression and skill switching during rollout</h3>
+
+      <div class="content has-text-justified">
+        <p>
+          Each clip pairs the synchronized camera views with a rolling plot of the execution-monitor head
+          probabilities against the &tau;<sub>done</sub>&nbsp;=&nbsp;0.60 threshold, marking pointer switches and the
+          ground-truth skill boundaries. The overlay reports the episode, frame index, plan pointer, the debounced
+          System&nbsp;2 action, the active skill, and the head probabilities. Play fullscreen to read the overlay.
+        </p>
+      </div>
+
+      <div class="video-wide">
+        <div class="publication-video">
+          <video controls preload="metadata" playsinline width="2540" height="480">
+            <source src="static/videos/blood_gas_rollout.mp4" type="video/mp4">
+            Your browser does not support HTML5 video.
+            <a href="static/videos/blood_gas_rollout.mp4">Download the video</a> instead.
+          </video>
+        </div>
+        <p class="figure-caption">
+          <strong>Blood gas analysis &mdash; recovery from operator intervention.</strong> A complete rollout under an
+          initial 24-step plan, with the pointer advancing as each skill completes. At roughly 75&nbsp;s an operator
+          removes the in-hand sample; the back head rises from 0.001 to 0.994 over about 100 frames, the debounced
+          action flips to <code>RECOVER</code>, and the protocol-constrained replanner returns a revised 23-step plan
+          that the robot executes to completion.
+        </p>
+      </div>
+
+      <div class="video-wide">
+        <div class="publication-video">
+          <video controls preload="metadata" playsinline width="1900" height="480">
+            <source src="static/videos/tube_sorting_rollout.mp4" type="video/mp4">
+            Your browser does not support HTML5 video.
+            <a href="static/videos/tube_sorting_rollout.mp4">Download the video</a> instead.
+          </video>
+        </div>
+        <p class="figure-caption">
+          <strong>Blood sample tube sorting &mdash; nominal plan progression.</strong> An undisturbed rollout over a
+          9-step plan: routine blood tube to the orange plate, sodium citrate tube to the blue plate, repeated for the
+          second pair, then a return to the home position. The completion head alone drives every pointer advance and
+          the plan walks monotonically from 1/9 to 9/9; the back head never fires.
+        </p>
+      </div>
+
+      <!-- Disturbance grasp: fixed-program vs. ours (routine blood tube) -->
+      <h3 class="title is-5 has-text-centered" style="margin-top:2.4rem;">Target movement during an isolated grasp skill</h3>
+
       <div class="content has-text-justified">
         <p>
           Two disturbance tests isolate different capabilities: moving a target during an isolated
@@ -806,9 +869,6 @@
           the blood gas workflow tests <code>RECOVER</code> and System&nbsp;2 replanning.
         </p>
       </div>
-
-      <!-- Disturbance grasp: fixed-program vs. ours (routine blood tube) -->
-      <h3 class="title is-5 has-text-centered" style="margin-top:0.5rem;">Target movement during an isolated grasp skill</h3>
       <div class="columns is-variable is-6">
         <div class="column">
           <div class="publication-video">
