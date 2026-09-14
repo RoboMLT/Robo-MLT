@@ -21,120 +21,436 @@
   <script defer src="static/js/fontawesome.all.min.js"></script>
 
   <style>
-    /* Native <video> player: the template only styles iframes. */
+    :root {
+      --primary-color: #3157d5;
+      --primary-deep: #1837a8;
+      --primary-soft: #eef2ff;
+      --accent-color: #0ea5a4;
+      --text-primary: #132238;
+      --text-secondary: #607086;
+      --text-muted: #8a99ab;
+      --background-primary: #ffffff;
+      --background-soft: #f7f9fc;
+      --background-accent: #f1f5fb;
+      --border-color: #e4eaf2;
+      --border-strong: #d6deea;
+      --shadow-sm: 0 6px 20px rgba(19, 34, 56, 0.06);
+      --shadow-md: 0 14px 36px rgba(19, 34, 56, 0.10);
+      --shadow-lg: 0 24px 60px rgba(19, 34, 56, 0.14);
+      --border-radius: 16px;
+      --border-radius-lg: 24px;
+      --content-width: 1152px;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: 88px;
+      background: var(--background-soft);
+    }
+
+    body {
+      margin: 0;
+      color: var(--text-primary);
+      background:
+        radial-gradient(circle at 8% 0%, rgba(49, 87, 213, 0.09), transparent 28rem),
+        radial-gradient(circle at 92% 18%, rgba(14, 165, 164, 0.07), transparent 24rem),
+        var(--background-soft);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    a { color: var(--primary-color); }
+    a:hover { color: var(--primary-deep); }
+    code { color: #2446b8; background: #edf2ff; border-radius: 6px; padding: 0.08em 0.35em; }
+
+    .reading-progress {
+      position: fixed;
+      z-index: 80;
+      top: 0;
+      left: 0;
+      width: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--primary-color), var(--accent-color));
+      box-shadow: 0 0 12px rgba(49, 87, 213, 0.35);
+      pointer-events: none;
+    }
+
+    .page-nav {
+      position: sticky;
+      top: 0;
+      z-index: 70;
+      border-bottom: 1px solid rgba(214, 222, 234, 0.82);
+      background: rgba(255, 255, 255, 0.84);
+      backdrop-filter: blur(18px) saturate(150%);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
+    }
+
+    .page-nav-inner {
+      width: min(calc(100% - 2rem), var(--content-width));
+      min-height: 64px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .page-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.65rem;
+      flex: 0 0 auto;
+      color: var(--text-primary);
+      font-weight: 800;
+      letter-spacing: -0.025em;
+    }
+
+    .page-brand:hover { color: var(--text-primary); }
+    .page-brand-mark {
+      width: 2rem;
+      height: 2rem;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 10px;
+      color: #fff;
+      background: linear-gradient(135deg, var(--primary-color), #6f75e9 60%, var(--accent-color));
+      box-shadow: 0 8px 20px rgba(49, 87, 213, 0.22);
+      font-size: 0.78rem;
+      letter-spacing: 0;
+    }
+
+    .page-nav-links {
+      display: flex;
+      align-items: center;
+      gap: 0.15rem;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .page-nav-links::-webkit-scrollbar { display: none; }
+    .page-nav-links a {
+      padding: 0.5rem 0.72rem;
+      border-radius: 10px;
+      white-space: nowrap;
+      color: var(--text-secondary);
+      font-size: 0.88rem;
+      font-weight: 650;
+      transition: background .2s ease, color .2s ease, transform .2s ease;
+    }
+    .page-nav-links a:hover {
+      color: var(--primary-color);
+      background: var(--primary-soft);
+      transform: translateY(-1px);
+    }
+
+    #main-content { overflow: hidden; }
+
+    #main-content > .hero:first-of-type {
+      position: relative;
+      isolation: isolate;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.96), rgba(247,249,252,.94)),
+        var(--background-primary);
+      border-bottom: 1px solid var(--border-color);
+    }
+    #main-content > .hero:first-of-type::before,
+    #main-content > .hero:first-of-type::after {
+      content: "";
+      position: absolute;
+      z-index: -1;
+      border-radius: 999px;
+      filter: blur(2px);
+      pointer-events: none;
+    }
+    #main-content > .hero:first-of-type::before {
+      width: 36rem;
+      height: 36rem;
+      top: -24rem;
+      left: 50%;
+      transform: translateX(-65%);
+      background: radial-gradient(circle, rgba(49,87,213,.17), rgba(49,87,213,0) 70%);
+    }
+    #main-content > .hero:first-of-type::after {
+      width: 28rem;
+      height: 28rem;
+      right: -12rem;
+      bottom: -16rem;
+      background: radial-gradient(circle, rgba(14,165,164,.10), rgba(14,165,164,0) 70%);
+    }
+
+    #main-content > .hero:first-of-type .hero-body {
+      padding: clamp(4.2rem, 9vw, 7.5rem) 1.5rem clamp(3.7rem, 7vw, 6rem);
+    }
+
+    .publication-title {
+      max-width: 1050px;
+      margin-left: auto !important;
+      margin-right: auto !important;
+      color: var(--text-primary) !important;
+      font-size: clamp(2.35rem, 5.3vw, 4.85rem) !important;
+      line-height: 1.04 !important;
+      letter-spacing: -0.052em !important;
+      font-weight: 850 !important;
+      text-wrap: balance;
+    }
+
+    .publication-authors {
+      color: var(--text-secondary);
+      font-weight: 600;
+    }
+
+    .status-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.42rem 0.9rem;
+      border-radius: 999px;
+      background: rgba(255,255,255,.9);
+      border: 1px solid var(--border-strong);
+      box-shadow: var(--shadow-sm);
+      color: var(--text-secondary);
+      font-size: 0.82rem;
+      font-weight: 750;
+      letter-spacing: 0.025em;
+    }
+    .status-tag::before {
+      content: "";
+      width: 0.48rem;
+      height: 0.48rem;
+      border-radius: 50%;
+      background: #f59e0b;
+      box-shadow: 0 0 0 4px rgba(245,158,11,.12);
+    }
+
+    .publication-links {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.65rem;
+      margin-top: 0.5rem;
+    }
+    .publication-links .link-block { margin: 0 !important; }
+    .publication-links .button {
+      min-width: 116px;
+      height: 2.9rem;
+      border: 1px solid transparent !important;
+      background: var(--text-primary) !important;
+      color: #fff !important;
+      font-weight: 700;
+      box-shadow: 0 10px 24px rgba(19,34,56,.14);
+      transition: transform .2s ease, box-shadow .2s ease, background .2s ease;
+    }
+    .publication-links .button:hover {
+      transform: translateY(-2px);
+      background: var(--primary-color) !important;
+      box-shadow: 0 14px 30px rgba(49,87,213,.23);
+    }
+    .publication-links .button[aria-disabled="true"] {
+      opacity: 0.48;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    .publication-links .button[aria-disabled="true"]:hover {
+      transform: none;
+      background: var(--text-primary) !important;
+    }
+
+    section.section,
+    section.hero.teaser,
+    section.hero.is-light {
+      position: relative;
+    }
+
+    section.section { padding: clamp(4.2rem, 7vw, 6.5rem) 1.5rem; }
+    section.hero.teaser .hero-body { padding: clamp(4rem, 7vw, 6rem) 1.5rem; }
+    section.hero.is-light {
+      background: linear-gradient(180deg, #f3f6fb 0%, #f7f9fc 100%) !important;
+      border-top: 1px solid var(--border-color);
+      border-bottom: 1px solid var(--border-color);
+    }
+    section.hero.is-light .container { padding-top: clamp(4rem, 7vw, 6rem); padding-bottom: clamp(4rem, 7vw, 6rem); }
+
+    section .title.is-3 {
+      color: var(--text-primary);
+      font-size: clamp(1.8rem, 3.3vw, 2.45rem);
+      letter-spacing: -0.035em;
+      line-height: 1.15;
+      margin-bottom: 2rem;
+    }
+    section .title.is-3::after {
+      content: "";
+      display: block;
+      width: 46px;
+      height: 4px;
+      margin: 0.7rem auto 0;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--primary-color), var(--accent-color));
+    }
+    #BibTeX .title.is-3::after { margin-left: 0; }
+
+    .title.is-5 {
+      color: var(--text-primary);
+      letter-spacing: -0.015em;
+      font-size: 1.14rem;
+    }
+
+    .content {
+      color: var(--text-secondary);
+      font-size: 1.04rem;
+      line-height: 1.82;
+    }
+    .content p { margin-bottom: 1.2em; }
+    .content strong { color: var(--text-primary); }
+
+    #abstract .column.is-four-fifths,
+    #contributions .column.is-four-fifths {
+      background: rgba(255,255,255,.82);
+      border: 1px solid rgba(214,222,234,.85);
+      border-radius: var(--border-radius-lg);
+      box-shadow: var(--shadow-md);
+      padding: clamp(2rem, 5vw, 3.3rem);
+    }
+
     .publication-video {
-      position: static;
+      position: relative;
       padding-bottom: 0;
       height: auto;
       overflow: hidden;
-      border-radius: var(--border-radius-lg, 16px);
+      border-radius: var(--border-radius-lg);
+      border: 1px solid rgba(214,222,234,.9);
       box-shadow: var(--shadow-lg);
+      background: #08101f;
+    }
+    .publication-video::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+      pointer-events: none;
     }
     .publication-video video {
       width: 100%;
       height: auto;
       display: block;
-      border-radius: var(--border-radius-lg, 16px);
+      border-radius: inherit;
       background: #000;
     }
 
-    /* Figures */
-    .figure-block { margin: 2rem 0 0.5rem; }
+    #real-world-rollout .container {
+      position: relative;
+    }
+    #real-world-rollout .publication-video {
+      max-width: 1040px;
+      margin: 0 auto;
+    }
+
+    .figure-block {
+      margin: 2.4rem 0 0.5rem;
+      padding: clamp(0.65rem, 1.4vw, 1rem);
+      border-radius: var(--border-radius-lg);
+      background: #fff;
+      border: 1px solid var(--border-color);
+      box-shadow: var(--shadow-md);
+    }
     .figure-block img {
       width: 100%;
       max-width: 100%;
       height: auto;
       display: block;
-      border-radius: var(--border-radius, 12px);
-      box-shadow: var(--shadow-md);
+      border-radius: 15px;
+      background: var(--background-accent);
     }
     .figure-caption {
       font-size: 0.92rem;
-      color: var(--text-secondary, #64748b);
-      line-height: 1.55;
-      margin-top: 0.85rem;
+      color: var(--text-secondary);
+      line-height: 1.62;
+      margin: 0.9rem 0.35rem 0.15rem;
       text-align: left;
     }
 
-    /* Contributions: Bulma's `.content ol` re-applies decimal markers,
-       hence the !important on list-style. */
     .content ol.contribution-list {
       list-style: none !important;
       margin-left: 0;
       counter-reset: contrib;
+      display: grid;
+      gap: 1rem;
     }
     .contribution-list li {
       position: relative;
-      padding-left: 2.1rem;
-      margin-bottom: 1.1rem;
-      line-height: 1.65;
+      padding: 1.1rem 1.15rem 1.1rem 3.75rem;
+      margin: 0;
+      line-height: 1.68;
       counter-increment: contrib;
+      border: 1px solid var(--border-color);
+      border-radius: 15px;
+      background: #fff;
+      box-shadow: 0 5px 16px rgba(19,34,56,.045);
     }
     .contribution-list li::before {
       content: counter(contrib);
       position: absolute;
-      left: 0;
-      top: 0.1rem;
-      width: 1.5rem;
-      height: 1.5rem;
-      border-radius: 50%;
-      background: var(--primary-color, #2563eb);
+      left: 1rem;
+      top: 1.05rem;
+      width: 2rem;
+      height: 2rem;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--primary-color), #6672e9);
       color: #fff;
-      font-size: 0.8rem;
-      font-weight: 700;
+      font-size: 0.82rem;
+      font-weight: 800;
       display: flex;
       align-items: center;
       justify-content: center;
+      box-shadow: 0 7px 16px rgba(49,87,213,.20);
     }
 
-    .status-tag {
-      display: inline-block;
-      padding: 0.3rem 0.9rem;
-      border-radius: 999px;
-      background: var(--background-accent, #f1f5f9);
-      border: 1px solid var(--border-color, #e2e8f0);
-      color: var(--text-secondary, #64748b);
-      font-size: 0.85rem;
-      font-weight: 600;
-      letter-spacing: 0.02em;
+    #experiments .content { max-width: 900px; margin-left: auto; margin-right: auto; }
+    #experiments .title.is-5 { margin-top: 2.4rem !important; margin-bottom: 1.2rem; }
+    #experiments .columns.is-variable > .column {
+      display: flex;
+      flex-direction: column;
+      gap: 0.1rem;
+    }
+    #experiments .columns.is-variable .publication-video { flex: 0 0 auto; }
+    #experiments .columns.is-variable .figure-caption {
+      flex: 1;
+      margin: 0.8rem 0 0;
+      padding: 0 0.2rem;
     }
 
-    .button[aria-disabled="true"] { opacity: 0.75; cursor: not-allowed; }
-
-    /* Result tables. Kept outside `.content` so Bulma's table rules do not
-       fight these; wide tables scroll inside their own box. */
-    .table-wrap { overflow-x: auto; max-width: 100%; margin-top: 1.25rem; }
+    .table-wrap {
+      overflow-x: auto;
+      max-width: 100%;
+      margin-top: 1.5rem;
+      border: 1px solid var(--border-color);
+      border-radius: var(--border-radius);
+      background: var(--background-primary);
+      box-shadow: var(--shadow-sm);
+    }
     table.results-table {
       width: 100%;
       border-collapse: collapse;
       font-size: 0.92rem;
-      background: var(--background-primary, #fff);
-      border-radius: var(--border-radius, 12px);
-      overflow: hidden;
-      box-shadow: var(--shadow-sm);
+      background: transparent;
     }
     table.results-table th,
     table.results-table td {
-      padding: 0.55rem 0.75rem;
+      padding: 0.72rem 0.85rem;
       text-align: center;
       white-space: nowrap;
-      border-bottom: 1px solid var(--border-color, #e2e8f0);
+      border-bottom: 1px solid var(--border-color);
     }
-    table.results-table th { font-weight: 700; color: var(--text-primary, #1e293b); }
-    table.results-table thead th { background: var(--background-accent, #f1f5f9); }
+    table.results-table th { font-weight: 750; color: var(--text-primary); }
+    table.results-table thead th { background: #f4f6fa; }
     table.results-table th:first-child,
     table.results-table td:first-child { text-align: left; white-space: normal; }
-    table.results-table tbody tr.group-start td { border-top: 2px solid var(--border-color, #e2e8f0); }
-    table.results-table tbody tr.is-ours { background: rgba(37, 99, 235, 0.07); }
-    table.results-table tbody tr.is-ours td { font-weight: 700; color: var(--text-primary, #1e293b); }
-    .table-note {
-      font-size: 0.88rem;
-      color: var(--text-secondary, #64748b);
-      line-height: 1.55;
-      margin-top: 0.75rem;
-    }
+    table.results-table tbody tr.group-start td { border-top: 2px solid var(--border-color); }
+    table.results-table tbody tr.is-ours { background: rgba(49,87,213,.065); }
+    table.results-table tbody tr.is-ours td { font-weight: 750; color: var(--text-primary); }
+    table.results-table tbody tr:hover { background: #f8faff; }
+    .table-note { font-size: 0.88rem; color: var(--text-secondary); line-height: 1.55; margin-top: 0.75rem; }
 
-    /* Runtime numbers as compact stat cards. */
     .runtime-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
@@ -142,39 +458,141 @@
       margin-top: 1.5rem;
     }
     .runtime-card {
-      background: var(--background-primary, #fff);
-      border: 1px solid var(--border-color, #e2e8f0);
-      border-radius: var(--border-radius, 12px);
+      background: var(--background-primary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--border-radius);
       box-shadow: var(--shadow-sm);
-      padding: 1rem 0.75rem;
+      padding: 1.1rem 0.85rem;
       text-align: center;
     }
-    .runtime-card .value {
-      font-size: 1.3rem;
-      font-weight: 700;
-      color: var(--primary-color, #2563eb);
-      line-height: 1.2;
-    }
-    .runtime-card .label {
-      font-size: 0.8rem;
-      color: var(--text-secondary, #64748b);
-      line-height: 1.4;
-      margin-top: 0.35rem;
-    }
+    .runtime-card .value { font-size: 1.35rem; font-weight: 800; color: var(--primary-color); line-height: 1.2; }
+    .runtime-card .label { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4; margin-top: 0.35rem; }
 
-    /* The BibTeX block has long unbreakable lines. Constrain the whole
-       chain so it scrolls inside its own box instead of widening the page. */
-    .bibtex-header { flex-wrap: wrap; gap: 0.5rem; max-width: 100%; }
+    #BibTeX { background: #eef2f8; border-top: 1px solid var(--border-color); }
+    #BibTeX .container {
+      background: #fff;
+      border: 1px solid var(--border-color);
+      border-radius: var(--border-radius-lg);
+      box-shadow: var(--shadow-md);
+      padding: clamp(1.5rem, 4vw, 2.4rem);
+    }
+    .bibtex-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      max-width: 100%;
+      margin-bottom: 1rem;
+    }
     #bibtex-code {
       overflow-x: auto;
       max-width: 100%;
       width: 100%;
       box-sizing: border-box;
+      margin: 0;
+      padding: 1.25rem 1.35rem;
+      border-radius: 14px;
+      border: 1px solid #26354c;
+      background: #111c2c;
+      color: #dce7f7;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
     }
-    #bibtex-code code { white-space: pre; display: block; }
+    #bibtex-code code { white-space: pre; display: block; color: inherit; background: transparent; padding: 0; }
+    .copy-bibtex-btn {
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 0.55rem 0.78rem;
+      background: #fff;
+      color: var(--text-secondary);
+      font-weight: 700;
+      cursor: pointer;
+      transition: .2s ease;
+    }
+    .copy-bibtex-btn:hover { border-color: #c7d2e2; color: var(--primary-color); transform: translateY(-1px); }
+    .copy-bibtex-btn.copied { color: #087f5b; border-color: #b7e4cf; background: #f2fbf7; }
+
+    .footer {
+      padding: 2.5rem 1.5rem !important;
+      background: #0f1a2a !important;
+      color: #9fb0c5;
+    }
+    .footer .content, .footer p { color: #9fb0c5; }
+    .footer a { color: #dbe7ff; }
+    .footer a:hover { color: #fff; }
+
+    .scroll-to-top {
+      position: fixed;
+      right: 1.25rem;
+      bottom: 1.25rem;
+      z-index: 50;
+      width: 2.9rem;
+      height: 2.9rem;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255,255,255,.55);
+      border-radius: 14px;
+      background: rgba(19,34,56,.92);
+      color: #fff;
+      box-shadow: 0 12px 28px rgba(19,34,56,.2);
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(8px);
+      transition: opacity .2s ease, transform .2s ease, visibility .2s ease, background .2s ease;
+      cursor: pointer;
+    }
+    .scroll-to-top.visible { opacity: 1; visibility: visible; transform: translateY(0); }
+    .scroll-to-top:hover { background: var(--primary-color); }
+
+    :focus-visible {
+      outline: 3px solid rgba(49,87,213,.32);
+      outline-offset: 3px;
+    }
+
+    @media (max-width: 768px) {
+      .page-nav-inner {
+        width: 100%;
+        padding: 0 0.8rem;
+        min-height: 58px;
+      }
+      .page-brand span:last-child { display: none; }
+      .page-nav-links { gap: 0; }
+      .page-nav-links a { font-size: 0.8rem; padding: 0.44rem 0.55rem; }
+      #main-content > .hero:first-of-type .hero-body { padding-left: 1rem; padding-right: 1rem; }
+      .publication-title { letter-spacing: -0.04em !important; }
+      section.section, section.hero.teaser .hero-body { padding-left: 1rem; padding-right: 1rem; }
+      section.hero.is-light .container { padding-left: 1rem; padding-right: 1rem; }
+      #abstract .column.is-four-fifths, #contributions .column.is-four-fifths { padding: 1.4rem; }
+      .content { font-size: 0.98rem; line-height: 1.72; }
+      .figure-caption { font-size: 0.86rem; }
+      .publication-links .button { min-width: 102px; height: 2.7rem; }
+      .scroll-to-top { right: 0.85rem; bottom: 0.85rem; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    }
   </style>
 </head>
 <body>
+
+<div class="reading-progress" aria-hidden="true"></div>
+<nav class="page-nav" aria-label="Page sections">
+  <div class="page-nav-inner">
+    <a class="page-brand" href="#main-content" aria-label="Robo-MLT home">
+      <span class="page-brand-mark">R</span><span>Robo-MLT</span>
+    </a>
+    <div class="page-nav-links">
+      <a href="#real-world-rollout">Rollout</a>
+      <a href="#abstract">Abstract</a>
+      <a href="#method">Method</a>
+      <a href="#contributions">Contributions</a>
+      <a href="#experiments">Experiments</a>
+      <a href="#BibTeX">BibTeX</a>
+    </div>
+  </div>
+</nav>
 
 <button class="scroll-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="Scroll to top" aria-label="Scroll to top">
   <i class="fas fa-chevron-up"></i>
@@ -235,7 +653,7 @@
   </section>
 
   <!-- ===================== REAL-WORLD ROLLOUT ===================== -->
-  <section class="hero teaser">
+  <section class="hero teaser" id="real-world-rollout">
     <div class="container is-max-desktop">
       <div class="hero-body" style="padding-top:0;">
         <h2 class="title is-3 has-text-centered">Real-World Rollout</h2>
@@ -248,40 +666,34 @@
           </video>
         </div>
         <p class="figure-caption has-text-centered" style="text-align:center;">
-          Uncut real-world execution of Robo-MLT on the Agilex dual-arm Static-Aloha platform, including the
-          workflow-interruption scenario in which an operator removes the in-hand sample. The back head detects that
-          the active skill can no longer be carried out, System&nbsp;2 returns <code>RECOVER</code>, and the bounded,
-          protocol-constrained replanner revises the forward plan.
+          Uncut real-world execution of Robo-MLT on the Agilex dual-arm Static-Aloha platform. When an operator
+          removes the in-hand sample, the back head detects the interruption, System&nbsp;2 returns <code>RECOVER</code>,
+          and the protocol-constrained replanner revises the remaining plan.
         </p>
       </div>
     </div>
   </section>
 
   <!-- ===================== ABSTRACT ===================== -->
-  <section class="section hero is-light">
+  <section class="section hero is-light" id="abstract">
     <div class="container is-max-desktop">
       <div class="columns is-centered has-text-centered">
         <div class="column is-four-fifths">
           <h2 class="title is-3">Abstract</h2>
           <div class="content has-text-justified">
             <p>
-              Medical laboratory robots must execute contact-rich manipulation while preserving the action order
-              prescribed by operating protocols. End-to-end imitation-learning and vision&ndash;language&ndash;action
-              policies may confuse visually similar workflow stages, yielding stage-inconsistent actions over long
-              horizons. We present <strong>Robo-MLT</strong>, a protocol-grounded dual-system framework that
-              separates explicit workflow monitoring from continuous action generation. A frozen
-              vision&ndash;language planner uses an initial observation to instantiate an ordered sequence over an
-              atomic-skill library. A lightweight execution monitor then tracks progress with two heads: a
-              <em>completion head</em> advances a plan pointer once the active skill finishes, while a
-              <em>back head</em> detects when human intervention leaves the workspace in a state from which that
-              skill can no longer be completed and triggers bounded, protocol-constrained replanning. Conditioned
-              on the active skill, a Qwen3-VL-based flow-matching executor generates action chunks that an
-              asynchronous runtime streams to the robot at the control-loop rate. Across 20 paired configurations on
-              blood gas analysis and blood sample tube sorting, Robo-MLT carries more samples through their full
-              workflow than four learning-based baselines and raises end-to-end task success rate by 15 percentage
-              points over the strongest hierarchical baseline &pi;<sub>0.5</sub> on both tasks. It also recovers from
-              operator intervention during execution and re-targets a sample displaced after the arm begins its
-              approach, whereas a fixed-program pipeline fails to grasp the displaced target.
+              Medical laboratory robots must execute contact-rich manipulation while preserving protocol-defined
+              action order. End-to-end imitation-learning and vision&ndash;language&ndash;action policies can confuse
+              visually similar workflow stages over long horizons. We present <strong>Robo-MLT</strong>, a
+              protocol-grounded dual-system framework that separates workflow monitoring from continuous action
+              generation. A frozen vision&ndash;language planner builds an ordered sequence over an atomic-skill library,
+              while a lightweight dual-head execution monitor tracks completion and detects intervention-induced
+              failures that require bounded, protocol-constrained replanning. Conditioned on the active skill, a
+              Qwen3-VL-based flow-matching executor generates action chunks at the robot control-loop rate. Across 20
+              paired configurations on blood gas analysis and blood sample tube sorting, Robo-MLT outperforms four
+              learning-based baselines and improves end-to-end task success by 15 percentage points over the strongest
+              hierarchical baseline &pi;<sub>0.5</sub> on both tasks. It also recovers from operator intervention and
+              re-targets samples displaced during approach.
             </p>
           </div>
         </div>
@@ -290,7 +702,7 @@
   </section>
 
   <!-- ===================== METHOD OVERVIEW ===================== -->
-  <section class="section">
+  <section class="section" id="method">
     <div class="container is-max-desktop">
       <div class="columns is-centered">
         <div class="column is-four-fifths">
@@ -298,31 +710,25 @@
 
           <div class="content has-text-justified">
             <p>
-              Robo-MLT comprises two coupled components: <strong>System&nbsp;2</strong>, a low-frequency semantic
-              reasoner that monitors execution and maintains the active atomic skill, and
-              <strong>System&nbsp;1</strong>, a high-frequency generative executor that maps the active skill to
-              continuous actions. A Qwen3.7-Max planner, queried zero-shot through a public API, reads the
-              task instruction, the instrument protocol, and an initial observation of the workspace, and composes an
-              ordered sequence over a declarative atomic-skill library &mdash; seven skills for blood gas analysis and
-              five for tube sorting. Because the plan is instantiated from the observed scene, the planner expands
-              the sequence to the tubes actually present and commits to a feasible order without any gradient update.
+              Robo-MLT couples <strong>System&nbsp;2</strong>, a low-frequency semantic reasoner that tracks the
+              active atomic skill, with <strong>System&nbsp;1</strong>, a high-frequency generative executor that maps
+              that skill to continuous actions. A zero-shot Qwen3.7-Max planner reads the task instruction, instrument
+              protocol, and initial workspace observation to compose an ordered sequence over a declarative skill
+              library &mdash; seven skills for blood gas analysis and five for tube sorting. The plan is instantiated
+              directly from the observed scene without gradient updates.
             </p>
             <p>
-              System&nbsp;2 tracks this plan with a multi-frame, dual-head execution monitor. A frozen SigLIP2 image
-              encoder and a temporal Transformer relate a multi-frame observation history to the text of the active
-              skill; two lightweight heads then read that shared representation. A <em>completion head</em> advances
-              the plan pointer once the active skill finishes, while a <em>back head</em> detects when human
-              intervention has left the workspace in a state from which that skill can no longer be completed. After
-              temporal debouncing, the monitor returns one of <code>STAY</code>, <code>ADVANCE</code>, or
-              <code>RECOVER</code>; <code>RECOVER</code> hands control to a replanner bounded by a per-episode call
-              budget and by hard protocol constraints that reject orderings the procedure forbids. A per-skill stall
-              timeout triggers the same path when the completion head never confirms a skill as finished.
+              System&nbsp;2 uses a multi-frame dual-head execution monitor built on a frozen SigLIP2 image encoder
+              and temporal Transformer. A <em>completion head</em> advances the plan when the active skill finishes,
+              while a <em>back head</em> detects intervention-induced states from which that skill can no longer be
+              completed. After temporal debouncing, the monitor returns <code>STAY</code>, <code>ADVANCE</code>, or
+              <code>RECOVER</code>. Recovery invokes a replanner constrained by a call budget and hard protocol rules;
+              a per-skill stall timeout can trigger the same path.
             </p>
             <p>
-              System&nbsp;1 executes the active skill with a Qwen3-VL-conditioned controller and a flow-matching
-              action head that generates 30-step action chunks. An asynchronous runtime coordinates the two systems:
-              System&nbsp;2 updates at 1.33&nbsp;Hz on a background worker, while System&nbsp;1 prefetches and blends
-              successive chunks so the controller holds its nominal 20&nbsp;Hz control-loop rate.
+              System&nbsp;1 executes the active skill with a Qwen3-VL-conditioned controller and flow-matching action
+              head that generates 30-step chunks. An asynchronous runtime lets System&nbsp;2 update at 1.33&nbsp;Hz while
+              System&nbsp;1 prefetches and blends chunks to maintain the nominal 20&nbsp;Hz control loop.
             </p>
           </div>
 
@@ -330,10 +736,8 @@
             <img src="static/figures/system_framework.png"
                  alt="Overview of Robo-MLT: a frozen vision-language planner constructs an ordered sequence of atomic skills, System 2 tracks the plan with a dual-head execution monitor, and System 1 executes the active skill."/>
             <p class="figure-caption">
-              <strong>Overview of Robo-MLT.</strong> A Qwen3.7-Max planner maps a user command, the
-              corresponding instrument protocol, and an initial scene observation to an ordered sequence of atomic
-              skills. System&nbsp;2 tracks this plan with a dual-head execution monitor and invokes bounded,
-              protocol-constrained replanning when human intervention disrupts the active skill.
+              <strong>Overview of Robo-MLT.</strong> A Qwen3.7-Max planner creates an ordered atomic-skill sequence.
+              System&nbsp;2 monitors progress and triggers bounded, protocol-constrained replanning when needed, while
               System&nbsp;1 executes the active skill with a Qwen3-VL-conditioned flow-matching policy.
             </p>
           </div>
@@ -343,7 +747,7 @@
   </section>
 
   <!-- ===================== CONTRIBUTIONS ===================== -->
-  <section class="section hero is-light">
+  <section class="section hero is-light" id="contributions">
     <div class="container is-max-desktop">
       <div class="columns is-centered">
         <div class="column is-four-fifths">
@@ -351,20 +755,17 @@
           <div class="content has-text-justified">
             <ol class="contribution-list">
               <li>
-                We propose <strong>Robo-MLT</strong>, a hierarchical framework that separates explicit, low-frequency
-                workflow monitoring from high-frequency generative control for long-horizon medical laboratory
-                manipulation.
+                We propose <strong>Robo-MLT</strong>, a hierarchical framework separating low-frequency workflow
+                monitoring from high-frequency generative control for long-horizon laboratory manipulation.
               </li>
               <li>
-                We develop a lightweight, multi-frame <strong>execution monitor</strong> whose two decision heads
-                determine when the active skill has completed and when human intervention should trigger replanning
-                of the remaining plan.
+                We develop a lightweight multi-frame <strong>execution monitor</strong> that detects skill completion
+                and when human intervention should trigger replanning.
               </li>
               <li>
-                We evaluate Robo-MLT on two <strong>real-world medical laboratory tasks</strong>, reaching end-to-end
-                success rates of <strong>85%</strong> and <strong>75%</strong> and sample completion rates of
-                <strong>92.50%</strong> and <strong>94.38%</strong>, which raises the average success rate by
-                15 points over &pi;<sub>0.5</sub>.
+                On two <strong>real-world medical laboratory tasks</strong>, Robo-MLT reaches end-to-end success rates
+                of <strong>85%</strong> and <strong>75%</strong> and sample completion rates of <strong>92.50%</strong>
+                and <strong>94.38%</strong>, improving average success by 15 points over &pi;<sub>0.5</sub>.
               </li>
             </ol>
           </div>
@@ -374,16 +775,15 @@
   </section>
 
   <!-- ===================== COMPARISON WITH CONVENTIONAL METHODS ===================== -->
-  <section class="section">
+  <section class="section" id="experiments">
     <div class="container is-max-desktop">
       <h2 class="title is-3 has-text-centered">Experiment Demonstrations</h2>
 
       <div class="content has-text-justified">
         <p>
-          The paper evaluates two disturbance types separately. Moving the target during an isolated
-          <em>grasp tube from rack</em> skill tests closed-loop re-targeting by the learned executor. Removing the
-          in-hand sample during the blood gas workflow, shown in the rollout above, instead tests the back head,
-          <code>RECOVER</code>, and bounded, protocol-constrained replanning by System&nbsp;2.
+          Two disturbance tests isolate different capabilities: moving a target during an isolated
+          <em>grasp tube from rack</em> skill tests closed-loop re-targeting, while removing the in-hand sample during
+          the blood gas workflow tests <code>RECOVER</code> and System&nbsp;2 replanning.
         </p>
       </div>
 
@@ -399,10 +799,9 @@
             </video>
           </div>
           <p class="figure-caption">
-            <strong>Fixed-Program.</strong> This is a single-skill baseline for the disturbance study, not a complete
-            long-horizon task baseline. It localizes the target tube in the initial frame, selects the corresponding
-            pre-calibrated waypoint, and executes an approach&ndash;grasp&ndash;lift sequence in open loop. It succeeds
-            in 20/20 static trials for each tube category, but in 0/20 disturbed trials for each category.
+            <strong>Fixed-Program.</strong> A single-skill baseline that localizes the tube once, selects a
+            pre-calibrated waypoint, and executes open-loop approach&ndash;grasp&ndash;lift. It succeeds in 20/20 static
+            trials per tube category and 0/20 disturbed trials.
           </p>
         </div>
         <div class="column">
@@ -414,11 +813,9 @@
             </video>
           </div>
           <p class="figure-caption">
-            <strong>Robo-MLT (ours).</strong> The closed-loop learned executor re-targets and grasps the moved tube.
-            Both &pi;<sub>0</sub> and Robo-MLT succeed in 20/20 static and 20/20 disturbed trials for each tube
-            category. The comparison therefore isolates closed-loop re-targeting relative to a sense-once
-            pre-programmed trajectory; it does not distinguish &pi;<sub>0</sub> from Robo-MLT or establish an
-            advantage of System&nbsp;2.
+            <strong>Robo-MLT (ours).</strong> The closed-loop executor re-targets and grasps the moved tube. Both
+            &pi;<sub>0</sub> and Robo-MLT succeed in 20/20 static and 20/20 disturbed trials per tube category; this
+            comparison isolates closed-loop re-targeting rather than an advantage of System&nbsp;2.
           </p>
         </div>
       </div>
@@ -433,12 +830,9 @@
         </video>
       </div>
       <p class="figure-caption has-text-centered" style="text-align:center;">
-        <strong>Representative perceptual-aliasing failure of end-to-end IL and VLA baselines.</strong> At the
-        instrument-docking stage, the observation just after insertion and the observation just before withdrawal are
-        nearly identical. The protocol requires the tube to be discarded once it has been withdrawn, but a policy
-        without an explicit representation of workflow progress cannot tell that the assay is already done: after
-        withdrawing the tube it inserts it again, then withdraws it again, cycling between the two stages instead of
-        advancing to disposal.
+        <strong>Representative perceptual-aliasing failure of end-to-end IL and VLA baselines.</strong> The scenes
+        before withdrawal and after insertion are nearly identical. Without explicit workflow progress, the policy
+        re-inserts the tube after withdrawal and cycles between stages instead of advancing to disposal.
       </p>
     </div>
   </section>
@@ -491,11 +885,31 @@
   function copyBibTeX() {
     var code = document.getElementById('bibtex-code').innerText;
     var btn = document.querySelector('.copy-bibtex-btn');
+    var text = btn.querySelector('.copy-text');
     navigator.clipboard.writeText(code).then(function () {
       btn.classList.add('copied');
-      setTimeout(function () { btn.classList.remove('copied'); }, 2000);
+      if (text) text.textContent = 'Copied';
+      setTimeout(function () {
+        btn.classList.remove('copied');
+        if (text) text.textContent = 'Copy';
+      }, 1600);
     });
   }
+
+
+  // Thin reading-progress indicator at the top of the viewport.
+  (function () {
+    var bar = document.querySelector('.reading-progress');
+    function updateProgress() {
+      var doc = document.documentElement;
+      var max = doc.scrollHeight - doc.clientHeight;
+      var progress = max > 0 ? (doc.scrollTop / max) * 100 : 0;
+      bar.style.width = progress + '%';
+    }
+    window.addEventListener('scroll', updateProgress, { passive: true });
+    window.addEventListener('resize', updateProgress, { passive: true });
+    updateProgress();
+  })();
 
   // Show the scroll-to-top button only once the user has scrolled.
   (function () {
