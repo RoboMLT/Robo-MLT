@@ -721,18 +721,18 @@
           <h2 class="title is-3">Abstract</h2>
           <div class="content has-text-justified">
             <p>
-              Medical laboratory robots must execute contact-rich manipulation while preserving protocol-defined
-              action order. End-to-end imitation-learning and vision&ndash;language&ndash;action policies can confuse
-              visually similar workflow stages over long horizons. We present <strong>Robo-MLT</strong>, a
-              protocol-grounded dual-system framework that separates workflow monitoring from continuous action
-              generation. A frozen vision&ndash;language planner builds an ordered sequence over an atomic-skill library,
-              while a lightweight dual-head execution monitor tracks completion and detects intervention-induced
-              failures that require bounded, protocol-constrained replanning. Conditioned on the active skill, a
-              Qwen3-VL-based flow-matching executor generates action chunks at the robot control-loop rate. Across 20
-              paired configurations on blood gas analysis and blood sample tube sorting, Robo-MLT outperforms four
-              learning-based baselines and improves end-to-end task success by 15 percentage points over the strongest
-              hierarchical baseline &pi;<sub>0.5</sub> on both tasks. It also recovers from operator intervention and
-              re-targets samples displaced during approach.
+              Medical laboratory robots must perform contact-rich manipulation while preserving the action order prescribed 
+              by operating protocols. End-to-end imitation-learning and vision--language--action policies may confuse visually
+              similar workflow stages, producing stage-inconsistent actions over a long horizon. We present Robo-MLT,
+              a protocol-grounded dual-system framework that separates explicit workflow monitoring from continuous action generation.
+              A frozen vision--language planner reads an initial observation and instantiates an ordered sequence over an atomic-skill library.
+              A lightweight execution monitor then tracks progress with two heads: a completion head advances a plan pointer once the active skill
+              has completed, while a back head recognizes when human intervention has left the workspace in a state from which that skill can no longer
+              be carried out, and triggers bounded, protocol-constrained replanning. Conditioned on the active skill, a Qwen3-VL-based
+              flow-matching executor generates action chunks that an asynchronous runtime streams to the robot at the control-loop rate. Across 20 paired 
+              configurations on blood gas analysis and blood sample tube sorting, Robo-MLT carries more samples through their full workflow than four
+              learning-based baselines, improves end-to-end task success rate by 15\% over the strongest hierarchical baseline &pi;<sub>0.5</sub> on both tasks, 
+              and recovers from mid-procedure interruptions that leave a fixed-program pipeline stuck.
             </p>
           </div>
         </div>
