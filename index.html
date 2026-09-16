@@ -819,10 +819,8 @@
 
       <div class="content has-text-justified">
         <p>
-          Each clip pairs the synchronized camera views with a rolling plot of the execution-monitor head
-          probabilities against the &tau;<sub>done</sub>&nbsp;=&nbsp;0.60 threshold, marking pointer switches and the
-          ground-truth skill boundaries. The overlay reports the episode, frame index, plan pointer, the debounced
-          System&nbsp;2 action, the active skill, and the head probabilities. Play fullscreen to read the overlay.
+          Each clip shows synchronized camera views alongside execution-monitor predictions, plan-pointer switches,
+          and ground-truth skill boundaries. The overlay summarizes the current plan step, active skill, and System 2 action.
         </p>
       </div>
 
@@ -835,11 +833,8 @@
           </video>
         </div>
         <p class="figure-caption">
-          <strong>Blood gas analysis &mdash; recovery from operator intervention.</strong> A complete rollout under an
-          initial 24-step plan, with the pointer advancing as each skill completes. At roughly 75&nbsp;s an operator
-          removes the in-hand sample; the back head rises from 0.001 to 0.994 over about 100 frames, the debounced
-          action flips to <code>RECOVER</code>, and the protocol-constrained replanner returns a revised 23-step plan
-          that the robot executes to completion.
+          <strong>Blood gas analysis. </strong> The robot executes a long-horizon blood gas analysis plan.
+            When the operator removes the in-hand sample, the system detects the disruption, triggers recovery, replans, and completes the task with the revised plan.
         </p>
       </div>
 
@@ -852,10 +847,8 @@
           </video>
         </div>
         <p class="figure-caption">
-          <strong>Blood sample tube sorting &mdash; nominal plan progression.</strong> An undisturbed rollout over a
-          9-step plan: routine blood tube to the orange plate, sodium citrate tube to the blue plate, repeated for the
-          second pair, then a return to the home position. The completion head alone drives every pointer advance and
-          the plan walks monotonically from 1/9 to 9/9; the back head never fires.
+          <strong>Blood sample tube sorting. </strong>The robot completes a 9-step tube-sorting task without intervention. 
+          Skill completion drives each plan transition, progressing sequentially through all steps until the robot returns to its home position.
         </p>
       </div>
 
