@@ -1,0 +1,17 @@
+<launch>
+  <!-- Start the LeRobot v3 collector with a task config from config/.
+
+         roslaunch dual_piper collect.launch config:=blood_gas_analysis
+         roslaunch dual_piper collect.launch config:=blood_gas_analysis_recovery
+
+       Run teleoperation.launch first. Keys are read globally (pynput) from the terminal / display
+       session; see the banner printed at start-up. When a dataset already exists and resume is
+       false the node asks for confirmation on stdin, so use `rosrun` in that case. -->
+  <arg name="config" default="blood_gas_analysis"
+       doc="Config name in config/ (blood_gas_analysis, tube_sorting, and their _recovery variants)"/>
+
+  <node pkg="dual_piper" type="data_to_lerobot3_node.py" name="data_to_lerobot3_node"
+        output="screen" required="true">
+    <param name="config_file" value="$(find dual_piper)/config/$(arg config).yaml"/>
+  </node>
+</launch>

@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>dual_piper</name>
+  <version>1.0.0</version>
+  <description>
+    Dual-arm AgileX Piper teleoperation data collection for Robo-MLT: joint-state publisher,
+    LeRobot v3 recorder with online subtask annotation and recovery-episode tagging, episode
+    replay, and offline dataset tools.
+  </description>
+
+  <maintainer email="anonymous@users.noreply.github.com">Robo-MLT Authors</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <exec_depend>realsense2_camera</exec_depend>
+
+  <export>
+  </export>
+</package>

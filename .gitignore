@@ -1,0 +1,19 @@
+# catkin
+build/
+devel/
+install/
+logs/
+.catkin_tools/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Recorded data and replay output
+replay_output/
+*.mp4
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,17 @@
+# Python environment for the recorder and the tools (Python >= 3.10, see docs/data_collection_pipeline.md).
+# ROS Noetic itself (rospy, sensor_msgs, realsense2_camera) comes from apt; this interpreter must be
+# able to import it after `source /opt/ros/noetic/setup.bash`.
+
+lerobot==0.4.4      # the recorder uses non-public LeRobotDataset APIs checked against this version
+piper_sdk
+pynput
+opencv-python
+numpy
+pandas
+pyarrow
+pyyaml
+tqdm
+av
+matplotlib
+rospkg
+catkin_pkg

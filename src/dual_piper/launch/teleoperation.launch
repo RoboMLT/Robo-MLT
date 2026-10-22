@@ -1,0 +1,108 @@
+<launch>
+  <!-- ═══════════════════════════════════════════════════════════════════
+       Dual-arm Piper Teleoperation System
+       ═══════════════════════════════════════════════════════════════════
+       Launches the dual-arm state publisher (state_get_node.py) and three Intel RealSense D435i
+       colour streams (top view, left wrist, right wrist), 640x480.
+
+         roslaunch dual_piper teleoperation.launch \
+             serial_top:=<serial> serial_left:=<serial> serial_right:=<serial>
+
+       List the connected camera serials with `rs-enumerate-devices -s`.
+  -->
+
+  <!-- ── Robot arm CAN arguments ───────────────────────────────────── -->
+  <arg name="piper_can_left_port"  default="can_left"
+       doc="CAN port for the left arm"/>
+  <arg name="piper_can_right_port" default="can_right"
+       doc="CAN port for the right arm"/>
+  <arg name="auto_enable" default="true"
+       doc="Automatically enable robot arms on startup"/>
+  <arg name="action_source" default="follower_feedback"
+       doc="follower_feedback (released datasets) or leader_command; see state_get_node.py"/>
+
+  <!-- ── State publisher ───────────────────────────────────────────── -->
+  <node pkg="dual_piper"
+        type="state_get_node.py"
+        name="dual_piper_state_get_node"
+        output="screen">
+    <param name="left_can_port"  value="$(arg piper_can_left_port)"/>
+    <param name="right_can_port" value="$(arg piper_can_right_port)"/>
+    <param name="auto_enable"    value="$(arg auto_enable)"/>
+    <param name="action_source"  value="$(arg action_source)"/>
+  </node>
+
+  <!-- ── Camera arguments (serial numbers are required) ────────────── -->
+  <arg name="serial_top"   doc="Serial number of the top-view RealSense"/>
+  <arg name="serial_left"  doc="Serial number of the left-wrist RealSense"/>
+  <arg name="serial_right" doc="Serial number of the right-wrist RealSense"/>
+  <arg name="camera1"     default="cam_top"/>
+  <arg name="serial_no_1" default="$(arg serial_top)"/>
+
+  <arg name="camera2"     default="cam_leftwrist"/>
+  <arg name="serial_no_2" default="$(arg serial_left)"/>
+
+  <arg name="camera3"     default="cam_rightwrist"/>
+  <arg name="serial_no_3" default="$(arg serial_right)"/>
+
+  <!-- ── Camera 1 (top) ────────────────────────────────────────────── -->
+  <group ns="$(arg camera1)">
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch">
+      <arg name="camera"           value="$(arg camera1)"/>
+      <arg name="serial_no"        value="$(arg serial_no_1)"/>
+      <arg name="enable_color"     value="true"/>
+      <arg name="enable_depth"     value="false"/>
+      <arg name="enable_infra1"    value="false"/>
+      <arg name="enable_infra2"    value="false"/>
+      <arg name="align_depth"      value="false"/>
+      <arg name="enable_pointcloud" value="false"/>
+      <arg name="enable_gyro"      value="false"/>
+      <arg name="enable_accel"     value="false"/>
+      <arg name="color_width"      value="640"/>
+      <arg name="color_height"     value="480"/>
+      <arg name="color_fps"        value="60"/>
+      <arg name="initial_reset"    value="false"/>
+    </include>
+  </group>
+
+  <!-- ── Camera 2 (left wrist) ─────────────────────────────────────── -->
+  <group ns="$(arg camera2)">
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch">
+      <arg name="camera"           value="$(arg camera2)"/>
+      <arg name="serial_no"        value="$(arg serial_no_2)"/>
+      <arg name="enable_color"     value="true"/>
+      <arg name="enable_depth"     value="false"/>
+      <arg name="align_depth"      value="false"/>
+      <arg name="enable_infra1"    value="false"/>
+      <arg name="enable_infra2"    value="false"/>
+      <arg name="enable_pointcloud" value="false"/>
+      <arg name="enable_gyro"      value="false"/>
+      <arg name="enable_accel"     value="false"/>
+      <arg name="color_width"      value="640"/>
+      <arg name="color_height"     value="480"/>
+      <arg name="color_fps"        value="60"/>
+      <arg name="initial_reset"    value="false"/>
+    </include>
+  </group>
+
+  <!-- ── Camera 3 (right wrist) ────────────────────────────────────── -->
+  <group ns="$(arg camera3)">
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch">
+      <arg name="camera"           value="$(arg camera3)"/>
+      <arg name="serial_no"        value="$(arg serial_no_3)"/>
+      <arg name="enable_color"     value="true"/>
+      <arg name="enable_depth"     value="false"/>
+      <arg name="align_depth"      value="false"/>
+      <arg name="enable_infra1"    value="false"/>
+      <arg name="enable_infra2"    value="false"/>
+      <arg name="enable_pointcloud" value="false"/>
+      <arg name="enable_gyro"      value="false"/>
+      <arg name="enable_accel"     value="false"/>
+      <arg name="color_width"      value="640"/>
+      <arg name="color_height"     value="480"/>
+      <arg name="color_fps"        value="60"/>
+      <arg name="initial_reset"    value="false"/>
+    </include>
+  </group>
+
+</launch>

@@ -1,0 +1,66 @@
+# Data collection — Task 2: blood sample tube sorting (nominal episodes).
+#
+#   roslaunch dual_piper collect.launch config:=tube_sorting
+#
+# Nominal corpus: complete workflows (switch the subtask at every skill boundary while paused) and
+# single atomic-skill episodes from randomised initial poses. Save with  s.
+#
+# Subtask texts and order must equal the Robo-MLT skill library (configs/skill_library/*.yaml of
+# the code release) byte for byte: the monitor and System 1 condition on this text.
+
+dataset:
+  repo_id: "RoboMLT-Lab/tube_sorting"
+  target_dir: "~/robomlt_data/tube_sorting"
+  task_name: "pick up sodium citrate tubes and place in the orange plate, and then pick up routine blood tubes and place in the blue plate."
+  robot_type: "dual_piper"
+  fps: 25
+  resume: true           # append to an existing dataset at target_dir
+  video_codec: "h264_nvenc"
+  subtasks:              # keyboard digit -> canonical instruction (subtask_index = digit - 1)
+    '1': 'grasp the routine blood tube.'
+    '2': 'grasp the sodium citrate tube.'
+    '3': 'drop the tube into the orange plate.'
+    '4': 'place to the blue plate.'
+    '5': 'return to the home position.'
+
+robot:
+  state_dim: 14          # 7 per arm (6 joints + gripper) x 2 arms
+  action_dim: 14
+  num_joints_per_arm: 7
+
+collection:
+  mode: nominal
+  max_timesteps: 10000   # max frames per episode before auto-pause
+  use_back_event: true   # recovery label column (0 at recording time)
+  streaming_encoding: true
+  encoder_threads: 4     # per software encoder (ignored for NVENC)
+  enable_view: true      # OpenCV operator view (needs a display)
+  view_bgr: false        # frames from imgmsg_to_cv2 are already BGR
+  view_max_width: 1280
+
+camera:
+  names: ["cam_top", "cam_left", "cam_right"]
+  image_height: 480
+  image_width: 640
+  use_depth: false
+  use_videos: true
+
+pointcloud:
+  enabled: false
+  target_points: 10000
+
+subtask:
+  enabled: true
+
+topics:
+  img_top: "/cam_top/cam_top/color/image_raw"
+  img_left: "/cam_leftwrist/cam_leftwrist/color/image_raw"
+  img_right: "/cam_rightwrist/cam_rightwrist/color/image_raw"
+  img_top_depth: "/cam_top/cam_top/aligned_depth_to_color/image_raw"
+  img_left_depth: "/cam_leftwrist/cam_leftwrist/aligned_depth_to_color/image_raw"
+  img_right_depth: "/cam_rightwrist/cam_rightwrist/aligned_depth_to_color/image_raw"
+  left_master: "left/master_joint_states"      # -> action
+  left_slave: "left/slave_joint_states"        # -> observation.state
+  right_master: "right/master_joint_states"
+  right_slave: "right/slave_joint_states"
+  pc_top: "/cam_top/cam_top/depth/color/points"
