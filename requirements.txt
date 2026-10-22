@@ -1,0 +1,37 @@
+# Robo-MLT dependencies.
+#
+# lerobot is NOT listed here: this repo needs a fork with `piper` / `dual_piper` robot support
+# (motor bus + calibration) that is not in the upstream package. Clone and install it separately
+# (editable install) before running anything under low_level_model/robot/ or the dataset loaders.
+# System-2 planning / monitor logic (high_level_model/planning, models/completion_gate.py,
+# low_level_model/robot/system2_controller.py) and the dataset statistics tool do not need it.
+
+torch>=2.4
+torchvision
+transformers>=4.57        # Qwen3-VL (System 1)
+diffusers>=0.30
+accelerate>=1.0
+
+numpy
+pandas
+pyarrow
+pyyaml
+tqdm
+requests
+draccus
+open-clip-torch
+safetensors
+termcolor
+typing_extensions
+
+opencv-python
+Pillow
+imageio[ffmpeg]
+matplotlib
+
+# Optional (only needed for specific paths — see the comment at each import site):
+# wandb           # training: wandb.enable: true in a train YAML
+# python-pptx     # eval/plot_demo_rows.py --pptx (editable-deck figure export)
+# pynput          # low_level_model/robot/keyboard_control.py (keyboard override on deployment)
+# bitsandbytes    # low_level_model/training/train_system1.py optimizer.use_8bit=true (pi0.5 single-GPU)
+# deepspeed       # accelerate launch --config_file configs/accelerate/{zero2,zero3}.yaml

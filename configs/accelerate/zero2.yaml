@@ -1,0 +1,23 @@
+# Accelerate launch config — multi-GPU DeepSpeed ZeRO-2, bf16.
+# Shards optimizer states + gradients across GPUs (params replicated). Use when the model
+# params fit per-GPU but fp32 AdamW states don't.
+#   accelerate launch --config_file configs/accelerate/zero2.yaml \
+#       -m low_level_model.training.train_system1 configs/system1/train/pi05.yaml
+# Requires: pip install deepspeed
+#
+# gradient_accumulation_steps is 1 here on purpose — the trainer accumulates gradients
+# itself (grad_accum_steps in the training YAML). Do not double-count.
+compute_environment: LOCAL_MACHINE
+distributed_type: DEEPSPEED
+mixed_precision: bf16
+num_processes: 2
+num_machines: 1
+machine_rank: 0
+use_cpu: false
+deepspeed_config:
+  zero_stage: 2
+  gradient_accumulation_steps: 1
+  gradient_clipping: 1.0
+  offload_optimizer_device: none
+  offload_param_device: none
+  zero3_init_flag: false

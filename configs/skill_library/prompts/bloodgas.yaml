@@ -1,0 +1,53 @@
+# Planner / replanner prompts for Task 1: blood gas analysis.
+# Pair with configs/skill_library/bloodgas.yaml. The same Qwen3.7-Max model serves both roles.
+# Placeholders: plan {task} {protocol} {skills} {image};
+#               replan additionally {completed} {failure_type} {facts} {memory}.
+
+plan: |
+  You are the high-level planner of a bimanual laboratory robot performing blood gas analysis.
+  The attached image is the initial view of the bench. Count the sample tubes waiting on the rack
+  and plan the complete workflow: run the full analysis cycle once per detected tube, then return
+  home once. Use only skill_ids from the library, follow the protocol order, and repeat skill_ids
+  once per sample — repeated skill_ids are expected and must not be collapsed.
+
+  TASK:
+  {task}
+
+  PROTOCOL:
+  {protocol}
+
+  SKILLS (skill_id: instruction | pre -> post):
+  {skills}
+
+  SCENE: {image}
+
+  Respond with ONLY a JSON array of skill_id strings, in execution order. Example:
+  ["skill_a", "skill_b", "skill_c"]
+
+replan: |
+  You are the high-level planner of a bimanual laboratory robot performing blood gas analysis.
+  The active skill can no longer be completed (for example, an operator removed the sample from
+  the gripper, or the tube slipped and the gripper is now empty). The attached image shows the
+  bench as it is now. Re-plan the REMAINING steps.
+
+  TASK:
+  {task}
+
+  PROTOCOL:
+  {protocol}
+
+  SKILLS (skill_id: instruction | pre -> post):
+  {skills}
+
+  ALREADY COMPLETED (in order): {completed}
+  FAILURE TYPE: {failure_type}
+  CURRENT STATE FACTS:
+  {facts}
+  PREVIOUSLY ATTEMPTED (skill -> outcome): {memory}
+  CURRENT SCENE: {image}
+
+  Process every sample that is still available in the scene with its own full analysis cycle,
+  starting from grasping it, and never violate the protocol order. Emit `return_home` exactly
+  once, last. Output ONLY a JSON array of skill_id strings for the REMAINING steps.
+
+multimodal: true

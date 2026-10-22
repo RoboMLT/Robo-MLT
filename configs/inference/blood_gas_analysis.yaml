@@ -1,0 +1,69 @@
+# Robo-MLT deployment — Task 1: blood gas analysis (paper Algorithm 1, Table I).
+#
+#   python -m low_level_model.robot.robot_inference configs/inference/blood_gas_analysis.yaml
+#   ... variant=timeout_only          # ablations: ours | single_frame | no_recovery | timeout_only
+#
+# Requires DASHSCOPE_API_KEY for the planner / replanner.
+
+robot:
+  type: dual_piper
+
+# ── System 1 (Qwen3-VL + flow-matching action head) ──────────────────────────
+policy_path: <path/to>/outputs/system1/blood_gas_analysis/qwen3vl_vla/checkpoints/last/pretrained_model
+# High-level task instruction. System 1 is prompted with "task: <this> subtask: <active skill>", so
+# it must equal the task text stored in the training dataset (meta/tasks.parquet).
+task: "blood gas sample analysis"
+device: cuda:0
+fps: 20                    # f_ctrl
+control_time_s: 1800       # safety cap on one run (not the SR time limit)
+overlap_steps: 8           # r: prefetch the next chunk once <= r actions remain (N = 30 per chunk)
+num_inference_steps: null  # keep the checkpoint's integration steps
+compile_model: true
+compile_mode: max-autotune
+compile_cache_dir: torch_compile_cache/blood_gas_analysis
+
+smoothing:
+  enabled: true
+  latency_k: 0
+  min_smooth_steps: 4      # w: blend window at each chunk boundary
+  weight_profile: linear
+
+rate_limit:                 # per-step joint-delta clamp; same safety limit for every method
+  enabled: true
+  max_step: 0.04
+
+rtc:                        # extension outside the paper; mutually exclusive with smoothing
+  enabled: false
+
+# ── System 2 (planner + execution monitor) ───────────────────────────────────
+skill_library: configs/skill_library/bloodgas.yaml
+planner_prompt: configs/skill_library/prompts/bloodgas.yaml
+gate_ckpt: <path/to>/outputs/system2/blood_gas_analysis/<run>     # run folder or .pth
+camera_names:              # must match the trained order (read from the checkpoint sidecar)
+  - observation.images.cam_top
+  - observation.images.cam_left
+  - observation.images.cam_right
+planner_camera: observation.images.cam_top   # global view sent as I_0 / I_t
+sampling_interval: 15      # K
+cooldown_steps: 10         # Delta_cd
+variant: ours
+
+pipeline:
+  tau_done: 0.6            # advance threshold
+  k_a: 2                   # advance debounce
+  tau_rec: 0.8             # recover threshold
+  k_b: 3                   # recover debounce
+  t_max_s: 30.0            # T_max: per-skill stall timeout
+  replan_budget: 3         # B_replan
+  max_plan_attempts: 3
+  rec_ema_alpha: 1.0       # filters off: raw probabilities are debounced as in the paper
+  completion_median_window: 1
+  completion_ema_alpha: 1.0
+
+use_llm: true
+llm_model: qwen3.7-max
+
+# ── Live status window (OpenCV) ──────────────────────────────────────────────
+enable_view: true
+view_bgr: true             # RealSense frames are RGB; convert for cv2 display
+view_max_width: 1280

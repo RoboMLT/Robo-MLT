@@ -1,0 +1,49 @@
+# Default planner / replanner prompts (identical to the built-in fallback in prompt_templates.py).
+# Copy this file per task and edit the wording; point at it via `planner_prompt` in the inference
+# config. Placeholders: plan {task} {protocol} {skills} {image};
+#                       replan additionally {completed} {failure_type} {facts} {memory}.
+
+plan: |
+  You are the high-level planner of a bimanual laboratory robot.
+  Given a TASK, the instrument PROTOCOL, a library of atomic SKILLS and the initial scene image,
+  output the ordered list of skill_ids that accomplishes the task. Use only skill_ids from the
+  library, follow the protocol order, and repeat skills as often as the scene requires.
+
+  TASK:
+  {task}
+
+  PROTOCOL:
+  {protocol}
+
+  SKILLS (skill_id: instruction | pre -> post):
+  {skills}
+
+  SCENE: {image}
+
+  Respond with ONLY a JSON array of skill_id strings, in execution order. Example:
+  ["skill_a", "skill_b", "skill_c"]
+
+replan: |
+  You are the high-level planner of a bimanual laboratory robot.
+  The active skill can no longer be completed. Re-plan the REMAINING steps from the CURRENT scene.
+
+  TASK:
+  {task}
+
+  PROTOCOL:
+  {protocol}
+
+  SKILLS (skill_id: instruction | pre -> post):
+  {skills}
+
+  ALREADY COMPLETED (in order): {completed}
+  FAILURE TYPE: {failure_type}
+  CURRENT STATE FACTS:
+  {facts}
+  PREVIOUSLY ATTEMPTED (skill -> outcome): {memory}
+  CURRENT SCENE: {image}
+
+  Plan only what can still be done in the scene as it now stands, and never violate the protocol
+  order. Output ONLY a JSON array of skill_id strings for the REMAINING steps, in execution order.
+
+multimodal: true

@@ -1,0 +1,79 @@
+# Baseline: pi0.5 (hierarchical VLA, predicts its own subtask) — Task 2: blood sample tube sorting.
+# Fine-tuned from lerobot/pi05_base; its subtask supervision reuses the same atomic-skill
+# boundary annotations System 2 is trained on (Sec. IV-A-4). Losses: flow MSE + FAST
+# action-token CE + subtask CE, with knowledge insulation.
+# Needs `physical-intelligence/fast`; 3.6B parameters (see configs/accelerate/zero3.yaml
+# for 24 GB cards).
+#
+#   python -m low_level_model.training.train_system1 configs/system1/train/tube_sorting/pi05.yaml
+
+policy:
+  type: pi05_full
+  device: cuda:0
+  pretrained_path: lerobot/pi05_base
+  dtype: bfloat16
+  chunk_size: 30
+  n_action_steps: 30
+  max_state_dim: 32
+  max_action_dim: 32
+  tokenizer_max_length: 200
+  subtask_max_length: 32
+  knowledge_insulation: true
+  freeze_vision_encoder: false
+  gradient_checkpointing: true
+  num_inference_steps: 10
+  max_decoding_steps: 24
+  subtask_regeneration_interval: 2
+  loss_weight_flow: 1.0
+  loss_weight_action_ce: 1.0
+  loss_weight_subtask_ce: 1.0
+
+# ── Dataset: nominal corpus only (recovery episodes are kept out) ────────────
+dataset:
+  repo_id: <path/to>/RoboMLT-Lab/tube_sorting
+  root: null
+  video_backend: pyav
+  use_imagenet_stats: true
+  filter_back_events: true
+  skill_library: None      # per-frame atomic-skill instruction
+  subtask_index_column: subtask_index
+  mask_cross_subtask_actions: false
+
+output_dir: outputs/system1/tube_sorting/pi05
+job_name: pi05_tube_sorting
+# ── Training loop (shared by System 1 and every baseline) ───────────────────
+batch_size: 8
+steps: 80000
+num_workers: 4
+seed: 1000
+grad_accum_steps: 1
+resume: false
+
+optimizer:
+  lr: 2.5e-5
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 0.01
+  grad_clip_norm: 1.0
+  use_8bit: false
+
+# ── LR scheduler: linear warm-up, then cosine decay over the remaining steps ─
+scheduler:
+  warmup_steps: 1000
+  decay_steps: 79000
+  decay_lr: 2.5e-6
+
+# ── Checkpointing ────────────────────────────────────────────────────────────
+save_checkpoint: true
+save_freq: 10000
+log_freq: 50
+
+wandb:
+  enable: false
+  mode: offline
+  project: RoboMLT_system1
+  entity: ""
+  disable_artifact: true
+
+max_delay_steps: 0
+shared_observation: false

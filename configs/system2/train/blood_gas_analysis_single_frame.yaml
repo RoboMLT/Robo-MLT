@@ -1,0 +1,95 @@
+# Single-Frame ablation (M = 1) of the System 2 execution monitor — Task 1: blood gas analysis (paper Sec. III-B, Table II).
+#
+#   python -m high_level_model.training.train_completion_gate \
+#       configs/system2/train/blood_gas_analysis_single_frame.yaml \
+#       dataset.repo_id=/abs/path/RoboMLT-Lab/blood_gas_analysis \
+#       dataset.recovery_repo_id=/abs/path/RoboMLT-Lab/blood_gas_analysis_recovery
+#
+# Completion labels come from the nominal corpus (complete workflows + atomic-skill episodes);
+# recovery positives come only from the separately recorded intervention / failure corpus, whose
+# final K_rec ~ U[20, 40] frames are labelled back_event = 1 (label_recovery_tail.py).
+
+# ── Dataset ──────────────────────────────────────────────────────────────────
+dataset:
+  repo_id: <path/to>/RoboMLT-Lab/blood_gas_analysis
+  recovery_repo_id: <path/to>/RoboMLT-Lab/blood_gas_analysis_recovery
+  camera_names:               # one global view + two wrist views
+    - observation.images.cam_top
+    - observation.images.cam_left
+    - observation.images.cam_right
+  min_episode_len: 0          # keep both nominal corpora
+  include_back_episodes: false
+  back_from_column: true
+  # Video timestamps drift ~2e-4 s in the captures; lerobot's 1e-4 default aborts the feature
+  # precompute with FrameTimestampError. 1e-2 is a quarter of a frame at 25 fps.
+  tolerance_s: 1.0e-2
+  val_repo_id: null
+  val_episodes: null
+  train_ratio: 0.85
+  episode_subset_seed: 42
+  history_len: 1              # M = 1: the monitor sees the current frame only
+  prediction_offset: 0
+  history_skip_frame: 1
+  random_skip_range: 0
+  max_episodes: null
+  use_command_in_meta: false
+  skill_library: configs/skill_library/bloodgas.yaml   # checked against meta/subtasks at startup
+  back_annotations: null
+  min_segment_len: 0
+  completion_window: 50       # final frames of each completed segment = completion positives
+  completion_at_episode_end: true
+
+# ── Segment batch sampler (balances the rare positives per batch) ────────────
+sampler:
+  use_segment_sampler: true
+  segs_per_batch: 16
+  frames_per_seg: 8           # batch = 128 (Table II)
+
+# ── Trunk g_psi (Fig. 3) ─────────────────────────────────────────────────────
+model:
+  freeze_siglip: true         # SigLIP2 image and text encoders stay frozen
+  fusion: cross_attention
+  temporal_layers: 2
+  temporal_heads: 8
+  cross_attn_layers: 2
+  cross_attn_heads: 8
+
+# ── Optimizer (Table II) ─────────────────────────────────────────────────────
+optimizer:
+  lr: 1.0e-4
+  weight_decay: 0.05
+  schedule: cosine
+  warmup_steps: 0
+  min_lr: 0.0
+
+# ── Loss (Eq. 6) ─────────────────────────────────────────────────────────────
+loss:
+  lambda_rec: 1.0
+  lambda_completion: 1.0
+  rec_pos_weight: null        # null -> inverse positive-class frequency (w_r)
+  completion_pos_weight: null # null -> inverse positive-class frequency (w_c)
+
+# ── Feature / text-embedding cache (training speed only) ─────────────────────
+cache:
+  features: true
+  text_embeddings: true
+  precompute_batch_size: 32
+  dir: outputs/feature_cache
+  reuse_disk: true
+
+wandb:
+  enable: false
+  mode: offline
+  project: RoboMLT_system2
+  entity: ""
+  log_interval: 50
+
+# ── Training loop ────────────────────────────────────────────────────────────
+batch_size: 128
+max_steps: 60000
+num_workers: 4
+seed: 42
+output_dir: outputs/system2/blood_gas_analysis_single_frame
+run_name: null
+gpu: 0
+save_interval: 0

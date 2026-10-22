@@ -1,0 +1,46 @@
+# π0.5 baseline deployment (paper Sec. IV-A-4). π0.5 decodes its own subtask, so it runs without
+# the external System 2. Same robot, camera streams, control rate and safety limits as Robo-MLT.
+#
+#   python -m low_level_model.robot.robot_inference_pi05 configs/inference/pi05.yaml \
+#       policy_path=<path/to>/outputs/system1/blood_gas_analysis/pi05/checkpoints/last/pretrained_model
+#
+# For tube sorting, override `task` with the tube-sorting task text and point `policy_path` at the
+# tube-sorting checkpoint. `task` must equal the dataset task text (meta/tasks.parquet).
+
+robot:
+  type: dual_piper
+
+policy_path: <path/to>/outputs/system1/blood_gas_analysis/pi05/checkpoints/last/pretrained_model
+task: "blood gas sample analysis"
+device: cuda:0
+fps: 20                    # f_ctrl, shared by all methods
+control_time_s: 1800       # safety cap on one run (not the SR time limit)
+
+overlap_steps: 8           # r
+num_inference_steps: 10
+# How often (s) π0.5 re-runs its subtask decode. 0 = every chunk.
+subtask_regeneration_interval: 10
+
+compile_model: true
+compile_mode: max-autotune
+compile_cache_dir: torch_compile_cache/pi05
+
+camera_names:
+  - observation.images.cam_top
+  - observation.images.cam_left
+  - observation.images.cam_right
+
+smoothing:
+  enabled: true
+  latency_k: null
+  min_smooth_steps: 4      # w
+  weight_profile: linear
+
+rate_limit:                 # same safety limit for every method
+  enabled: true
+  max_step: 0.04
+  max_step_per_joint: null
+
+enable_view: true
+view_bgr: true
+view_max_width: 1280

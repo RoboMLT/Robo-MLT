@@ -1,0 +1,75 @@
+# Atomic-skill library S for Task 1: blood gas analysis (N_s = 8).
+#
+# canonical_instruction values must stay BYTE-FOR-BYTE identical to meta/subtasks.parquet of the
+# training data, in subtask_index order. The monitor conditions on this text through the frozen
+# SigLIP2 text tower, so any wording drift moves the skill elsewhere in text space and silently
+# degrades both heads. `python -m high_level_model.data.dataset_stats` checks the match.
+#
+# Keyboard digits 1-8 jump the plan pointer to the skill in declaration order (operator override,
+# not part of the method); 0 prints the current plan.
+skills:
+  - skill_id: grasp_routine_tube
+    canonical_instruction: "grasp the routine blood tube."
+    precondition_text: "The gripper is empty and the routine blood tube is within reach"
+    postcondition_text: "The gripper is closed and holding the routine blood tube"
+    system1_policy_ref: "bloodgas/grasp_routine_tube"
+
+  - skill_id: remove_cap
+    canonical_instruction: "remove the sample tube cap."
+    precondition_text: "The gripper is holding the blood gas sample tube with its cap on"
+    postcondition_text: "The sample tube cap is detached and held clear of the tube"
+    system1_policy_ref: "bloodgas/remove_cap"
+
+  - skill_id: discard_cap
+    canonical_instruction: "discard the tube cap into the waste bin."
+    precondition_text: "The detached sample tube cap is held clear of the tube"
+    postcondition_text: "The sample tube cap is dropped into the waste bin"
+    system1_policy_ref: "bloodgas/discard_cap"
+
+  - skill_id: dock_to_analyzer
+    canonical_instruction: "dock the blood gas sample tube to the blood gas analyzer."
+    precondition_text: "The uncapped blood gas sample tube is held and the analyzer is ready"
+    postcondition_text: "The blood gas sample tube is docked at the analyzer input port"
+    system1_policy_ref: "bloodgas/dock_to_analyzer"
+
+  - skill_id: insert_to_probe
+    canonical_instruction: "insert the sample tube into the analyzer probe."
+    precondition_text: "The blood gas sample tube is docked at the analyzer input port"
+    postcondition_text: "The sample tube is inserted onto the analyzer probe for testing"
+    system1_policy_ref: "bloodgas/insert_to_probe"
+
+  - skill_id: withdraw_tube
+    canonical_instruction: "withdraw the blood gas sample tube after testing is complete."
+    precondition_text: "The blood gas sample tube is on the analyzer probe and testing is done"
+    postcondition_text: "The blood gas sample tube is withdrawn and held clear of the analyzer"
+    system1_policy_ref: "bloodgas/withdraw_tube"
+
+  - skill_id: discard_sample
+    canonical_instruction: "discard the tested blood sample into the waste bin."
+    precondition_text: "The tested blood gas sample tube is held clear of the analyzer"
+    postcondition_text: "The tested blood sample is dropped into the waste bin"
+    system1_policy_ref: "bloodgas/discard_sample"
+
+  - skill_id: return_home
+    canonical_instruction: "return the robotic arm to the home position."
+    precondition_text: "The gripper is empty after discarding the tested sample"
+    postcondition_text: "The arm is back at the starting home pose"
+    system1_policy_ref: "bloodgas/return_home"
+
+# Instrument protocol and the hard ordering constraints every executed plan must satisfy
+# (paper Sec. III-B). Each rule is checked per sample cycle; see planning/protocol.py.
+protocol:
+  text: |
+    Every sample on the rack is analysed in its own cycle, in this order: grasp the tube, remove
+    its cap, discard the cap, dock the tube at the analyzer inlet, insert it onto the sampling
+    probe, withdraw it once the assay has finished, and discard the tested sample. A tube is never
+    inserted before it is docked, never withdrawn before it is inserted, and never discarded
+    before it is withdrawn. The arm returns home exactly once, after the last sample.
+  terminal: [return_home]
+  rules:
+    - {skill: remove_cap,       after: [grasp_routine_tube], since: [remove_cap]}
+    - {skill: discard_cap,      after: [remove_cap],         since: [discard_cap]}
+    - {skill: dock_to_analyzer, after: [discard_cap],        since: [dock_to_analyzer]}
+    - {skill: insert_to_probe,  after: [dock_to_analyzer],   since: [insert_to_probe]}
+    - {skill: withdraw_tube,    after: [insert_to_probe],    since: [withdraw_tube]}
+    - {skill: discard_sample,   after: [withdraw_tube],      since: [discard_sample]}
