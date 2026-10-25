@@ -1,0 +1,65 @@
+# Atomic-skill library for the RECORDED blood gas captures (BloodGasAnalysis_2026061x/0626, N_s = 7).
+#
+# The captures were annotated with seven skills: docking and probe insertion are one recorded
+# segment ("dock ..."), and the first grasp is worded "grasp the blood gas sample tube." — so the
+# 8-skill `bloodgas.yaml` (paper wording) does not match their meta/subtasks.parquet. This file
+# does, BYTE-FOR-BYTE and in subtask_index order (position in `skills:` = subtask_index), so the
+# monitor can be trained and evaluated on the captures; `dataset_stats.py` checks the match.
+skills:
+  - skill_id: grasp_sample_tube
+    canonical_instruction: "grasp the blood gas sample tube."
+    precondition_text: "The gripper is empty and the blood gas sample tube is within reach"
+    postcondition_text: "The gripper is closed and holding the blood gas sample tube"
+    system1_policy_ref: "bloodgas/grasp_sample_tube"
+
+  - skill_id: remove_cap
+    canonical_instruction: "remove the sample tube cap."
+    precondition_text: "The gripper is holding the blood gas sample tube with its cap on"
+    postcondition_text: "The sample tube cap is detached and held clear of the tube"
+    system1_policy_ref: "bloodgas/remove_cap"
+
+  - skill_id: discard_cap
+    canonical_instruction: "discard the tube cap into the waste bin."
+    precondition_text: "The detached sample tube cap is held clear of the tube"
+    postcondition_text: "The sample tube cap is dropped into the waste bin"
+    system1_policy_ref: "bloodgas/discard_cap"
+
+  - skill_id: dock_to_analyzer
+    canonical_instruction: "dock the blood gas sample tube to the blood gas analyzer."
+    precondition_text: "The uncapped blood gas sample tube is held and the analyzer is ready"
+    postcondition_text: "The blood gas sample tube is docked on the analyzer probe for testing"
+    system1_policy_ref: "bloodgas/dock_to_analyzer"
+
+  - skill_id: withdraw_tube
+    canonical_instruction: "withdraw the blood gas sample tube after testing is complete."
+    precondition_text: "The blood gas sample tube is on the analyzer probe and testing is done"
+    postcondition_text: "The blood gas sample tube is withdrawn and held clear of the analyzer"
+    system1_policy_ref: "bloodgas/withdraw_tube"
+
+  - skill_id: discard_sample
+    canonical_instruction: "discard the tested blood sample into the waste bin."
+    precondition_text: "The tested blood gas sample tube is held clear of the analyzer"
+    postcondition_text: "The tested blood sample is dropped into the waste bin"
+    system1_policy_ref: "bloodgas/discard_sample"
+
+  - skill_id: return_home
+    canonical_instruction: "return the robotic arm to the home position."
+    precondition_text: "The gripper is empty after discarding the tested sample"
+    postcondition_text: "The arm is back at the starting home pose"
+    system1_policy_ref: "bloodgas/return_home"
+
+protocol:
+  text: |
+    Every sample on the rack is analysed in its own cycle, in this order: grasp the tube, remove
+    its cap, discard the cap, dock the tube onto the analyzer probe, withdraw it once the assay has
+    finished, and discard the tested sample. A tube is never withdrawn before it is docked and
+    never discarded before it is withdrawn. The arm returns home exactly once, after the last
+    sample.
+  terminal: [return_home]
+  cycle: [grasp_sample_tube, remove_cap, discard_cap, dock_to_analyzer, withdraw_tube, discard_sample]
+  rules:
+    - {skill: remove_cap,       after: [grasp_sample_tube], since: [remove_cap]}
+    - {skill: discard_cap,      after: [remove_cap],        since: [discard_cap]}
+    - {skill: dock_to_analyzer, after: [discard_cap],       since: [dock_to_analyzer]}
+    - {skill: withdraw_tube,    after: [dock_to_analyzer],  since: [withdraw_tube]}
+    - {skill: discard_sample,   after: [withdraw_tube],     since: [discard_sample]}

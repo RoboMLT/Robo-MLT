@@ -1,0 +1,91 @@
+# System 2 execution monitor on the RECORDED blood gas captures (BloodGasAnalysis_20260618 + 0621,
+# merged/deduplicated by build_release_dataset.py: 150 complete workflows + 165 atomic-skill
+# episodes, 30 fps, 7 skills). Used to check whether the monitor works on real data before the
+# simulation study.
+#
+#   python -m high_level_model.training.train_completion_gate configs/system2/train/blood_gas_recorded.yaml
+#   ... dataset.history_len=1 run_name=single_frame          # SINGLE-FRAME ablation (M = 1)
+#   ... dataset.imagenet_normalize=false run_name=raw01       # normalisation A/B
+#
+# The captures contain no recovery episodes (back_event is all zero), so the recovery head is not
+# trained here (lambda_rec = 0); recovery is evaluated in simulation only.
+
+dataset:
+  repo_id: <path/to/dataset>
+  recovery_repo_id: null
+  heldout_file: <path/to/heldout_test.json>   # 47 test episodes
+  camera_names:
+    - observation.images.cam_top
+    - observation.images.cam_left
+    - observation.images.cam_right
+  min_episode_len: 0
+  include_back_episodes: false
+  back_from_column: true
+  tolerance_s: 1.0e-2
+  video_backend: pyav        # torchcodec's native library does not load in the sim venv
+  val_repo_id: null
+  val_episodes: null
+  train_ratio: 0.85
+  episode_subset_seed: 42
+  history_len: 6              # M (Table I)
+  prediction_offset: 0
+  # K = 15 control steps at 20 Hz = 0.75 s = 22.5 frames of the 30 fps captures.
+  history_skip_frame: 22
+  random_skip_range: 22
+  max_episodes: null
+  use_command_in_meta: false
+  skill_library: configs/skill_library/bloodgas_recorded.yaml
+  back_annotations: null
+  min_segment_len: 0
+  completion_window: 60       # 2 s at 30 fps (the released config's 50 frames at 25 fps)
+  completion_at_episode_end: true
+  imagenet_normalize: true
+
+sampler:
+  use_segment_sampler: true
+  segs_per_batch: 16
+  frames_per_seg: 8
+
+model:
+  freeze_siglip: true
+  fusion: cross_attention
+  temporal_layers: 2
+  temporal_heads: 8
+  cross_attn_layers: 2
+  cross_attn_heads: 8
+
+optimizer:
+  lr: 1.0e-4
+  weight_decay: 0.05
+  schedule: cosine
+  warmup_steps: 0
+  min_lr: 0.0
+
+loss:
+  lambda_rec: 0.0
+  lambda_completion: 1.0
+  rec_pos_weight: 1.0
+  completion_pos_weight: null
+
+cache:
+  features: true
+  text_embeddings: true
+  precompute_batch_size: 32
+  dir: outputs/feature_cache
+  reuse_disk: true
+
+wandb:
+  enable: false
+  mode: offline
+  project: RoboMLT_system2
+  entity: ""
+  log_interval: 50
+
+batch_size: 128
+max_steps: 60000
+num_workers: 8
+seed: 42
+output_dir: outputs/system2/blood_gas_recorded
+run_name: ours_m6
+gpu: 0
+save_interval: 0
