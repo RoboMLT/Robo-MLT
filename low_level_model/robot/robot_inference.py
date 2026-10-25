@@ -316,7 +316,7 @@ def main():
     # RTC). Set on both the policy and its inner model config, whichever carries it.
     if cfg.num_inference_steps is not None:
         for c in (getattr(policy, "config", None), getattr(getattr(policy, "model", None), "config", None)):
-            for name in ("num_inference_steps", "num_inference_timesteps"):
+            for name in ("num_inference_steps", "num_inference_timesteps", "num_steps"):  # num_steps: SmolVLA
                 if c is not None and hasattr(c, name):
                     setattr(c, name, cfg.num_inference_steps)
         logger.info("System-1 integration steps overridden to %d.", cfg.num_inference_steps)

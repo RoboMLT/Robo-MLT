@@ -19,9 +19,10 @@ Example::
 
 # from __future__ import annotations
 
+import json
 import logging
 import os
-import shutil
+import random
 import sys
 import time
 from contextlib import nullcontext
@@ -456,9 +457,12 @@ def auto_resume(cfg: System1TrainConfig) -> None:
     if last.exists():
         cfg.resume = True
         logger.info("Auto-resume enabled from %s", last)
-    elif Path(cfg.output_dir).is_dir() and not checkpoints_dir.is_dir():
-        shutil.rmtree(cfg.output_dir, ignore_errors=True)
-        logger.info("Removed stale output dir %s for a fresh run", cfg.output_dir)
+    elif Path(cfg.output_dir).is_dir() and not checkpoints_dir.is_dir() and any(Path(cfg.output_dir).iterdir()):
+        # Never delete a non-empty directory we did not create: it may be a mistyped path.
+        raise FileExistsError(
+            f"output_dir {cfg.output_dir} exists, is not empty and holds no checkpoints/; "
+            "choose a fresh output_dir or remove it by hand"
+        )
 
 
 def _save_checkpoint(cfg: System1TrainConfig, step: int, policy, optimizer, scheduler,
@@ -469,15 +473,19 @@ def _save_checkpoint(cfg: System1TrainConfig, step: int, policy, optimizer, sche
     pretrained_dir.mkdir(exist_ok=True)
 
     policy.save_pretrained(pretrained_dir)
+    # A config built directly from its concrete class is dumped without draccus' ``type``
+    # discriminator; inference dispatches on it (and would otherwise fall back to PI0).
+    config_file = pretrained_dir / "config.json"
+    saved = json.loads(config_file.read_text())
+    if "type" not in saved and getattr(policy.config, "type", None):
+        config_file.write_text(json.dumps({"type": policy.config.type, **saved}, indent=4))
     torch.save(
         {"step": step, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict()},
         checkpoint_dir / "training_state.pth",
     )
-    try:
-        preprocessor.save_pretrained(pretrained_dir)
-        postprocessor.save_pretrained(pretrained_dir)
-    except Exception:
-        pass
+    # Without the saved normalizer stats, inference would silently run un-normalized actions.
+    preprocessor.save_pretrained(pretrained_dir)
+    postprocessor.save_pretrained(pretrained_dir)
 
     # Update "last" symlink.
     last = Path(cfg.output_dir) / "checkpoints" / "last"
@@ -584,6 +592,7 @@ def train(cfg: System1TrainConfig, accelerator: Accelerator | None = None) -> No
 
     if cfg.seed is not None:
         torch.manual_seed(cfg.seed + accelerator.process_index)
+        random.seed(cfg.seed + accelerator.process_index)  # delay augmentation draws from `random`
 
     # ── W&B ──────────────────────────────────────────────────────────────────
     wandb_run = None
@@ -622,10 +631,14 @@ def train(cfg: System1TrainConfig, accelerator: Accelerator | None = None) -> No
     policy_cfg = cfg.policy
     policy_cfg.device = str(accelerator.device)
 
-    if getattr(policy_cfg, "pretrained_path", None):
-        policy = make_policy(policy_cfg, dataset.meta)
-    else:
-        policy = make_policy(policy_cfg, dataset.meta)
+    if cfg.resume:
+        # Resume from the last checkpoint's weights, not from the original base checkpoint.
+        last_model = Path(cfg.output_dir) / "checkpoints" / "last" / "pretrained_model"
+        if last_model.is_dir():
+            policy_cfg.pretrained_path = str(last_model.resolve())
+            if is_main:
+                logger.info("Resuming weights from %s", policy_cfg.pretrained_path)
+    policy = make_policy(policy_cfg, dataset.meta)
 
     preprocessor, postprocessor = make_processors(
         policy_cfg, dataset_stats=dataset.meta.stats

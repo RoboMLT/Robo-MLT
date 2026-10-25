@@ -36,7 +36,10 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.utils.checkpoint import checkpoint
-from transformers.modeling_utils import no_init_weights
+try:
+    from transformers.modeling_utils import no_init_weights
+except ImportError:  # transformers >= 5 moved it
+    from transformers.initialization import no_init_weights
 from transformers.models.gemma.modeling_gemma import GemmaForCausalLM
 from lerobot.policies.pi_gemma import _gated_residual, layernorm_forward
 from transformers.models.paligemma.modeling_paligemma import PaliGemmaForConditionalGeneration

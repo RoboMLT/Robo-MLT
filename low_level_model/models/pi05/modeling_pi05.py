@@ -1771,7 +1771,10 @@ class PI05FullPolicy(PreTrainedPolicy):
                 **kwargs,
             )
 
-        from transformers.modeling_utils import no_init_weights
+        try:
+            from transformers.modeling_utils import no_init_weights
+        except ImportError:  # transformers >= 5 moved it
+            from transformers.initialization import no_init_weights
         with no_init_weights():
             model = cls(config, **kwargs)
         try:
