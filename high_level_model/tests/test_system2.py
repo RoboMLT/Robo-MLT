@@ -18,6 +18,9 @@ enough) and use a mock SigLIP backbone, so nothing is downloaded. Torch tests sk
     T11 controller cadence (Algorithm 1): K-step sampling, cooldown, switch flag, replanning hold
     T12 recover robustness: timer after a slow replan, replanner exceptions, sorting fallback
     T13 controller: jobs from before a reset are dropped, override never waits for a replan
+    T14 initial plan: a raising VLM backend is retried, then falls back instead of crashing
+    T15 monitor dataset refuses to run without the meta.subtasks text map
+    T16 replans size the remaining work from the plan (0 items -> only the terminal skill)
 """
 
 import logging
@@ -580,6 +583,68 @@ def test_controller_stale_jobs() -> bool:
     return True
 
 
+def test_initial_plan_errors() -> bool:
+    from high_level_model.planning.planner import Planner
+    from high_level_model.planning.system2_pipeline import System2Pipeline
+
+    lib = _library()
+    calls = []
+
+    def flaky(prompt, images=None):
+        calls.append(prompt)
+        if len(calls) < 2:
+            raise ConnectionError("simulated API outage")
+        return '["grasp_routine_tube", "remove_cap", "discard_cap", "dock_to_analyzer", ' \
+               '"insert_to_probe", "withdraw_tube", "discard_sample", "return_home"]'
+
+    pipe = System2Pipeline(lib, Planner(lib, llm_fn=flaky), clock=lambda: 0.0, max_plan_attempts=3)
+    pipe.reset(TASK)
+    assert len(calls) == 2 and pipe.plan_source == "llm" and pipe.plan_admissible, (calls, pipe.plan)
+    print("   one failed call is retried; the second answer is used")
+
+    def down(prompt, images=None):
+        raise ConnectionError("simulated API outage")
+
+    pipe = System2Pipeline(lib, Planner(lib, llm_fn=down), clock=lambda: 0.0, max_plan_attempts=3)
+    pipe.reset(TASK)
+    planner = pipe.planner
+    assert pipe.plan == planner.cycle_ids() + planner.terminal_ids() and pipe.plan_source == "fallback"
+    print(f"   backend down for all attempts -> offline fallback ({len(pipe.plan)} steps), no crash")
+    return True
+
+
+def test_dataset_requires_subtasks() -> bool:
+    from types import SimpleNamespace
+
+    from high_level_model.data.completion_gate_dataset import CompletionGateDataset
+
+    stub = SimpleNamespace(dset=SimpleNamespace(meta=SimpleNamespace(subtasks=None, tasks=None)),
+                           use_command_in_meta=False, index_key="subtask_index")
+    try:
+        CompletionGateDataset._build_index_to_text(stub)
+    except RuntimeError as exc:
+        assert "meta.subtasks" in str(exc)
+        print("   missing meta/subtasks -> RuntimeError (no silent empty skill text)")
+        return True
+    raise AssertionError("expected RuntimeError for a dataset without a subtask text map")
+
+
+def test_replan_remaining_items() -> bool:
+    lib = _library()
+    pipe = _pipeline(lib)
+    cycle = list(pipe.planner.cycle_ids())
+    pipe.plan = cycle * 2 + pipe.planner.terminal_ids()
+    pipe.pointer = 1                                   # first item, second skill
+    assert pipe._plan_remaining_cycles("recovery_head") == 1
+    assert pipe._plan_remaining_cycles("stall_timeout") == 2
+    pipe.pointer = len(cycle) + 1                      # last item in hand
+    assert pipe._plan_remaining_cycles("recovery_head") == 0
+    assert pipe._do_recover("recovery_head")
+    assert pipe.plan[pipe.pointer:] == pipe.planner.terminal_ids(), pipe.plan[pipe.pointer:]
+    print("   item removed from the last cycle -> replan = terminal only; stall -> retry the item")
+    return True
+
+
 # ----------------------------------------------------------------------- runner
 def main():
     tests = [
@@ -596,6 +661,9 @@ def main():
         ("T11 controller cadence", test_controller_cadence),
         ("T12 recover robustness", test_recover_robustness),
         ("T13 controller stale jobs", test_controller_stale_jobs),
+        ("T14 initial plan errors", test_initial_plan_errors),
+        ("T15 dataset needs subtask text", test_dataset_requires_subtasks),
+        ("T16 replan remaining items", test_replan_remaining_items),
     ]
     passed = skipped = failed = 0
     for name, fn in tests:

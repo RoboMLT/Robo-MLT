@@ -146,6 +146,7 @@ class System2Pipeline:
         self.pointer: int = 0
         self.memory: List = []           # R_t: (skill_id, outcome) record of attempted skills
         self.plan_admissible: bool = True
+        self.plan_source: str = "fallback"
         # Scene images handed to the planner: I_0 at reset, the latest frame I_t at a recover.
         self.planner_images = None
         # Optional hook: how many work items (samples, tubes) remain; sizes the offline fallback.
@@ -175,8 +176,15 @@ class System2Pipeline:
             self.planner_images = images
         candidate: List[str] = []
         violations: List[str] = ["no plan returned"]
+        self.plan_source = "llm" if self.planner.llm_fn is not None else "fallback"
         for attempt in range(1, self.max_plan_attempts + 1):
-            candidate = self.planner.plan(task_text, images=self.planner_images)
+            try:
+                candidate = self.planner.plan(task_text, images=self.planner_images)
+            except Exception as exc:  # network / API / parsing failure of the VLM backend
+                logger.warning("Initial plan call failed (attempt %d/%d): %s",
+                               attempt, self.max_plan_attempts, exc)
+                candidate, violations = [], [f"planner error: {exc}"]
+                continue
             violations = self.protocol.violations(candidate) if candidate else ["empty plan"]
             if not violations:
                 break
@@ -184,6 +192,12 @@ class System2Pipeline:
                            attempt, self.max_plan_attempts, "; ".join(violations[:3]))
             if self.planner.llm_fn is None:
                 break  # the offline fallback is deterministic; re-querying cannot help
+        if not candidate:
+            # Every attempt raised: run the offline protocol shape rather than crash the episode.
+            candidate = self.planner.cycle_ids() + self.planner.terminal_ids()
+            violations = self.protocol.violations(candidate)
+            self.plan_source = "fallback"
+            logger.error("Planner unavailable; using the offline fallback plan (%d steps).", len(candidate))
         self.plan_admissible = not violations
         if not self.plan_admissible:
             logger.error("No admissible initial plan; keeping the last candidate (%d steps).",
@@ -300,6 +314,21 @@ class System2Pipeline:
         self.pointer += 1
         return True
 
+    def _plan_remaining_cycles(self, failure_type: str) -> int:
+        """Work items still to process, read from the plan itself (no extra sensing).
+
+        Cycles that have not started yet are the later occurrences of the cycle's first skill. A
+        recovery-head trigger means the active item is gone (e.g. removed from the gripper), so it
+        is not counted; a stall timeout means it is still there and its cycle is retried.
+        """
+        # protocol.cycle, else declaration order minus the terminal skill (Planner.cycle_ids).
+        cycle_ids = getattr(self.planner, "cycle_ids", None)
+        cycle = cycle_ids() if callable(cycle_ids) else tuple(getattr(self.protocol, "cycle", ()) or ())
+        if not cycle:
+            return 1
+        later = sum(1 for sid in self.plan[self.pointer + 1:] if sid == cycle[0])
+        return later + (1 if failure_type == "stall_timeout" else 0)
+
     def _do_recover(self, failure_type: str) -> bool:
         """Revise the remaining plan (Eq. 5) within the replan budget. Returns True on success."""
         if self.replan_budget <= 0:
@@ -313,12 +342,12 @@ class System2Pipeline:
             "precondition": self.library.get(skill).precondition_text,
             "postcondition_expected": self.library.get(skill).postcondition_text,
         }
-        cycles = 1
+        cycles = self._plan_remaining_cycles(failure_type)
         if self.remaining_cycles_fn is not None:
             try:
                 cycles = max(1, int(self.remaining_cycles_fn()))
             except Exception as exc:  # noqa: BLE001 - a bad hook must not abort the recovery
-                logger.warning("remaining_cycles_fn raised (%s); assuming 1 remaining cycle.", exc)
+                logger.warning("remaining_cycles_fn raised (%s); using the plan estimate (%d).", exc, cycles)
 
         accepted: Optional[List[str]] = None
         outcome = "rejected"

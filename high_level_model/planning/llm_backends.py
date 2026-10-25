@@ -148,6 +148,8 @@ def qwen_llm_fn(
             resp = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
             resp.raise_for_status()
             data = resp.json()
+            # Token accounting of the latest call (planner reliability / cost reporting).
+            _call.last_usage = data.get("usage")
             content = data["choices"][0]["message"]["content"]
             # When enable_thinking=True, Qwen3 returns reasoning in <think>...</think> tags
             # before the actual answer. Strip the thinking block so callers always receive clean
@@ -162,6 +164,41 @@ def qwen_llm_fn(
         except (KeyError, IndexError, ValueError) as exc:
             raise QwenError(f"Unexpected Qwen response format: {exc}") from exc
 
+    _call.last_usage = None
+    return _call
+
+
+def local_vl_llm_fn(
+    model_id: str = "Qwen/Qwen3-VL-2B-Instruct",
+    device: str = "cuda",
+    max_new_tokens: int = 512,
+) -> Callable[[str], str]:
+    """A locally hosted vision-language model with the same ``(prompt, images=None) -> str`` interface.
+
+    For running the planner without API access (e.g. a small Qwen3-VL); greedy decoding. Token usage
+    of the latest call is exposed as ``fn.last_usage`` like the DashScope backend.
+    """
+    import torch
+    from PIL import Image
+    from transformers import AutoModelForImageTextToText, AutoProcessor
+
+    processor = AutoProcessor.from_pretrained(model_id)
+    model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.bfloat16).to(device).eval()
+
+    def _call(prompt: str, images=None) -> str:
+        content = [{"type": "image", "image": Image.fromarray(img)} for img in (images or [])]
+        content.append({"type": "text", "text": prompt})
+        inputs = processor.apply_chat_template([{"role": "user", "content": content}], tokenize=True,
+                                               add_generation_prompt=True, return_dict=True,
+                                               return_tensors="pt").to(device)
+        with torch.inference_mode():
+            out = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        new = out[0, inputs["input_ids"].shape[1]:]
+        _call.last_usage = {"prompt_tokens": int(inputs["input_ids"].shape[1]), "completion_tokens": int(new.shape[0]),
+                            "total_tokens": int(inputs["input_ids"].shape[1] + new.shape[0])}
+        return processor.decode(new, skip_special_tokens=True)
+
+    _call.last_usage = None
     return _call
 
 

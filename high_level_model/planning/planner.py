@@ -93,11 +93,12 @@ class Planner:
             images: the current observation I_t (see :meth:`plan`).
             repeat_cycles: how many more times the protocol's repeatable body still has to run —
                 i.e. how many work items are left in the scene (samples on the bench, tubes in the
-                rack). The offline fallback turns this straight into ``cycle * n + terminal``; the
-                LLM path passes it as a fact so the model can size its own answer. Defaults to 1.
+                rack); 0 leaves only the terminal skill. The offline fallback turns this straight
+                into ``cycle * n + terminal``; the LLM path passes it as a fact so the model can
+                size its own answer. Defaults to 1.
         """
         completed_ids = completed_ids or []
-        n = max(1, int(repeat_cycles))
+        n = max(0, int(repeat_cycles))   # 0: nothing left to process, only the terminal skill
         if self.llm_fn is None:
             # Offline fallback. The old behaviour ("declaration order minus whatever was already
             # done") cannot express a second pass over the bench: after one full cycle every skill
