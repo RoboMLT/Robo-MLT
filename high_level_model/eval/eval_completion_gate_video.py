@@ -491,6 +491,7 @@ def _resolve_gate_sidecar(ckpt_path: str) -> Tuple[str, dict]:
             "history_skip_frame": ds.get("history_skip_frame"),
             "completion_window": ds.get("completion_window"),
             "completion_at_episode_end": ds.get("completion_at_episode_end"),
+            "imagenet_normalize": ds.get("imagenet_normalize", True),
             "model": cfg.get("model", {}) or {},
         }
     return pth, {}
@@ -546,12 +547,15 @@ def main():
                              "skill text stays wrong. Requires --skill_library.")
     parser.add_argument("--skill_library", type=str, default=None,
                         help="Skill-library YAML (configs/skill_library/*.yaml); needed for --closed_loop")
-    # Controller thresholds for --closed_loop. NOTE these tick once per FRAME here, whereas on the
-    # robot System 2 ticks every `sampling_interval` frames — so k_a/cooldown are NOT directly
-    # comparable to inference.yaml unless you also set --tick_stride to that sampling_interval.
+    # Controller thresholds for --closed_loop. The pointer ticks once every --tick_stride dataset
+    # frames, which by default is derived from the deployment cadence (sampling_interval control
+    # steps at control_fps), so k_a means the same here as in inference.yaml.
     parser.add_argument("--tau_done", type=float, default=0.6)
     parser.add_argument("--k_a", type=int, default=2)
-    parser.add_argument("--cooldown", type=int, default=5)
+    parser.add_argument("--cooldown", type=int, default=0,
+                        help="Pipeline-level cooldown in monitor ticks. Deployment uses 0 here (its "
+                             "Delta_cd = 10 control steps lives in System2Controller and is shorter "
+                             "than one 15-step tick).")
     # Recovery is OFF by default (build_eval_pipeline pins tau_back above 1 and replan_budget to 0)
     # so a mid-episode replan can't rewrite the oracle plan while advance timing is being measured.
     # Pass these to switch it back on for a task whose back head is actually supervised.
@@ -597,9 +601,14 @@ def main():
                         help="Hide beta_t from the chart and overlay. Use it for tasks whose "
                              "back_event column is all-zero (the head never learned, so its output "
                              "is noise and showing it implies a signal that isn't there).")
-    parser.add_argument("--tick_stride", type=int, default=15,
-                        help="run the pointer once every N frames, matching the deployment "
-                             "sampling_interval so k_a/cooldown mean the same as in inference.yaml")
+    parser.add_argument("--tick_stride", type=int, default=None,
+                        help="Run the pointer once every N dataset frames. Default: "
+                             "round(sampling_interval * dataset_fps / control_fps), i.e. the "
+                             "deployment K = 15 steps at 20 Hz (0.75 s) expressed in dataset frames.")
+    parser.add_argument("--sampling_interval", type=int, default=15,
+                        help="Deployment System-2 sampling interval K, in control steps")
+    parser.add_argument("--control_fps", type=float, default=20.0,
+                        help="Deployment control rate f_ctrl (Hz)")
     parser.add_argument("--output", type=str, default=None,
                         help="Output mp4 path (default: "
                              "<ckpt_dir>/videos/<run>_<ckpt>_ep{N:04d}.mp4)")
@@ -658,12 +667,12 @@ def main():
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     _tol = {} if args.tolerance_s is None else {"tolerance_s": args.tolerance_s}
+    # Same frame transform the monitor was trained with (sidecar ``imagenet_normalize``).
     model_ds = LeRobotDataset(
         repo_id=args.repo_id,
-        image_transforms=T.Compose([
-            T.ToDtype(torch.float32, scale=True),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]),
+        image_transforms=T.Compose([T.ToDtype(torch.float32, scale=True)] + (
+            [T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])]
+            if side.get("imagenet_normalize", True) else [])),
         **_tol,
     )
     raw_ds = LeRobotDataset(
@@ -692,6 +701,11 @@ def main():
 
     ep_start, ep_end = _get_ep_bounds(model_ds.meta, args.episode)
     total_frames = ep_end - ep_start
+    if args.tick_stride is None:
+        # Dataset frames and control steps differ (e.g. 25/30 fps captures vs 20 Hz control).
+        args.tick_stride = max(1, round(args.sampling_interval * model_ds.meta.fps / args.control_fps))
+        logger.info("tick_stride = %d dataset frames (K=%d steps @ %.0f Hz, data %d fps)",
+                    args.tick_stride, args.sampling_interval, args.control_fps, model_ds.meta.fps)
     logger.info("Episode %d: [%d, %d)  total=%d frames", args.episode, ep_start, ep_end, total_frames)
     logger.info("Task instruction: %s", task_instruction)
 

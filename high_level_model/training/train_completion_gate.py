@@ -28,9 +28,11 @@ Example::
 
 import dataclasses
 import hashlib
+import json
 import logging
 import math
 import os
+import random
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -120,6 +122,26 @@ class DatasetConfig:
     # when captures run to completion rather than being cut off mid-skill — without it a
     # single-subtask episode contributes zero positives and the head learns "this skill never ends".
     completion_at_episode_end: bool = False
+    # ImageNet mean/std normalisation of the frames before the SigLIP encoder, which then applies its
+    # own (0.5, 0.5) normalisation on top. True keeps the behaviour the released checkpoints were
+    # trained with; False feeds SigLIP the [0, 1] RGB it expects. Recorded in the sidecar so
+    # deployment and evaluation reproduce it.
+    imagenet_normalize: bool = True
+    # JSON file ``{"nominal": [episode, ...], "recovery": [episode, ...]}`` of episodes reserved as
+    # a held-out TEST set: they are removed from both the train and the val split (val drives
+    # checkpoint selection, so it cannot double as the test set). Either key may be omitted.
+    heldout_file: Optional[str] = None
+    # LeRobot video decoder ("pyav" / "torchcodec"); None keeps LeRobot's default (torchcodec when
+    # importable, whose native library fails to load in some environments).
+    video_backend: Optional[str] = None
+    # Drop episodes no longer than this many frames AFTER the seeded train/val splits (nominal and
+    # recovery), leaving the splits themselves unchanged. Use M * stride of a longer-history run to
+    # train a shorter-history variant on exactly the same episodes (and share its feature cache).
+    drop_short_after_split: int = 0
+    # Explicit per-frame completion label column (1 = the active skill is physically done), e.g.
+    # ``completion`` in the simulation datasets. None keeps the segment-tail rule
+    # (last ``completion_window`` frames of each completed segment), as for the real captures.
+    completion_label_column: Optional[str] = None
 
 
 @dataclass
@@ -190,6 +212,10 @@ class CacheConfig:
     dir: str = "outputs/feature_cache"
     # Read/write the on-disk cache. Off = always recompute in-process (the pre-existing behaviour).
     reuse_disk: bool = True
+    # Decode up to this many consecutive frames of one episode per video call. Decoding frame by
+    # frame re-seeks to a keyframe every time, which dominates the precompute on long captures;
+    # a window decodes sequentially with LeRobot's own frame selection. 1 = per-frame (legacy).
+    decode_window: int = 32
 
 
 @dataclass
@@ -338,6 +364,8 @@ def build_gate_sidecar(cfg: CompletionGateTrainConfig, skill_texts: Optional[Lis
         # they must round-trip or the overlay won't match what the head was trained on.
         "completion_window": cfg.dataset.completion_window,
         "completion_at_episode_end": cfg.dataset.completion_at_episode_end,
+        "imagenet_normalize": cfg.dataset.imagenet_normalize,
+        "completion_label_column": cfg.dataset.completion_label_column,
         "model": {
             "fusion": cfg.model.fusion,
             "temporal_layers": cfg.model.temporal_layers,
@@ -401,7 +429,24 @@ def build_loaders(cfg: CompletionGateTrainConfig, full_dataset, val_dataset=None
                         len(keep), dset.meta.total_episodes, n_long, min_len, n_back_only)
         return keep
 
-    all_indices = np.array(_keep_episodes(full_dataset), dtype=int)
+    heldout = {"nominal": set(), "recovery": set()}
+    if cfg.dataset.heldout_file:
+        with open(cfg.dataset.heldout_file) as f:
+            raw = json.load(f)
+        heldout = {k: {int(e) for e in raw.get(k, [])} for k in heldout}
+        logger.info("Held-out test episodes excluded from train/val: %d nominal, %d recovery (%s).",
+                    len(heldout["nominal"]), len(heldout["recovery"]), cfg.dataset.heldout_file)
+
+    short = int(cfg.dataset.drop_short_after_split or 0)
+
+    def _drop_short(dset, eps):
+        """Remove episodes no longer than ``drop_short_after_split`` frames (after the split)."""
+        if short <= 0:
+            return eps
+        return [ep for ep in eps if (lambda b: b[1] - b[0])(_get_ep_bounds(dset.meta, ep)) > short]
+
+    all_indices = np.array([ep for ep in _keep_episodes(full_dataset) if ep not in heldout["nominal"]],
+                           dtype=int)
     np.random.seed(cfg.dataset.episode_subset_seed)
     np.random.shuffle(all_indices)
     # Optionally keep only a random subset of episodes (the dataset can be huge). Since the indices
@@ -424,6 +469,7 @@ def build_loaders(cfg: CompletionGateTrainConfig, full_dataset, val_dataset=None
         # episode goes to the train split and validation is skipped entirely downstream.
         split = min(n_eps, int(round(n_eps * cfg.dataset.train_ratio)))
         train_eps, val_eps = all_indices[:split].tolist(), all_indices[split:].tolist()
+        train_eps, val_eps = _drop_short(full_dataset, train_eps), _drop_short(full_dataset, val_eps)
     if cross_val:
         logger.info("Cross-dataset validation: %d train episodes from %s; val from %s episodes %s.",
                     len(train_eps), cfg.dataset.repo_id, cfg.dataset.val_repo_id,
@@ -445,6 +491,7 @@ def build_loaders(cfg: CompletionGateTrainConfig, full_dataset, val_dataset=None
         completion_window=cfg.dataset.completion_window,
         completion_at_episode_end=cfg.dataset.completion_at_episode_end,
         random_skip_range=cfg.dataset.random_skip_range,
+        completion_label_column=cfg.dataset.completion_label_column,
     )
     # randomize the stride only on the train split; val stays deterministic for comparable metrics.
     train_ds = CompletionGateDataset(full_dataset, subset_episodes=train_eps,
@@ -460,10 +507,12 @@ def build_loaders(cfg: CompletionGateTrainConfig, full_dataset, val_dataset=None
                                         **common) if val_eps else None)
 
     if recovery_dataset is not None:
-        rec_eps = np.arange(recovery_dataset.meta.total_episodes)
+        rec_eps = np.array([ep for ep in range(recovery_dataset.meta.total_episodes)
+                            if ep not in heldout["recovery"]], dtype=int)
         np.random.RandomState(cfg.dataset.episode_subset_seed).shuffle(rec_eps)
         split = min(len(rec_eps), int(round(len(rec_eps) * cfg.dataset.train_ratio)))
         rec_train, rec_val = rec_eps[:split].tolist(), rec_eps[split:].tolist()
+        rec_train, rec_val = _drop_short(recovery_dataset, rec_train), _drop_short(recovery_dataset, rec_val)
         logger.info("Recovery corpus %s: %d train / %d val episodes.",
                     cfg.dataset.recovery_repo_id, len(rec_train), len(rec_val))
         # A recovery episode ends in the disturbance, not in a finished skill: its final run must
@@ -523,6 +572,50 @@ class _FrameImageDataset(Dataset):
         return torch.stack([data[cam] for cam in self.camera_names], dim=0)
 
 
+class _FrameWindowDataset(Dataset):
+    """Serves ``[N, Cams, C, H, W]`` for a window of consecutive frames of one episode.
+
+    Uses LeRobot's ``decode_video_frames`` with all N timestamps at once, so the decoder seeks once
+    per window instead of once per frame; frame selection and image transforms are LeRobot's own,
+    hence the features match the per-frame path.
+    """
+
+    def __init__(self, lerobot_ds, frame_indices: List[int], camera_names: List[str], window: int) -> None:
+        self.dset = lerobot_ds
+        self.camera_names = camera_names
+        hf = lerobot_ds.hf_dataset
+        ts_all = hf["timestamp"]
+        ep_all = hf["episode_index"]
+        self.windows = []   # (episode, [global frame], [episode-relative timestamp])
+        current = None
+        for f in frame_indices:
+            ep = int(ep_all[f])
+            if current is None or current[0] != ep or len(current[1]) >= window or current[1][-1] != f - 1:
+                current = (ep, [], [])
+                self.windows.append(current)
+            current[1].append(f)
+            current[2].append(float(ts_all[f]))
+
+    def __len__(self) -> int:
+        return len(self.windows)
+
+    def __getitem__(self, i):
+        from lerobot.datasets.video_utils import decode_video_frames
+
+        ep, _, ts = self.windows[i]
+        meta = self.dset.meta
+        cams = []
+        for cam in self.camera_names:
+            from_ts = meta.episodes[ep][f"videos/{cam}/from_timestamp"]
+            path = self.dset.root / meta.get_video_file_path(ep, cam)
+            frames = decode_video_frames(path, [from_ts + t for t in ts], self.dset.tolerance_s,
+                                         self.dset.video_backend)          # [N, C, H, W] float [0, 1]
+            if self.dset.image_transforms is not None:
+                frames = torch.stack([self.dset.image_transforms(fr) for fr in frames])
+            cams.append(frames)
+        return torch.stack(cams, dim=1)
+
+
 class FrameGatherDataset(Dataset):
     """History windows gathered on demand from a per-global-frame SigLIP feature cache.
 
@@ -559,19 +652,65 @@ class FrameGatherDataset(Dataset):
 
 # ── on-disk cache: keyed so parallel sweep processes share one copy ──────────────
 
-def _cache_key(kind: str, repo_id: str, camera_names: List[str], history_len: int,
-               frame_indices: List[int], model_name: str) -> str:
+def _cache_key(kind: str, repo_id: str, camera_names: List[str], history_len: Optional[int],
+               frame_indices: List[int], model_name: str, *extra: str) -> str:
     """Short digest of everything that changes the cached tensor.
 
     ``camera_names`` is hashed **in order** (not sorted): it is the Cams axis of the stored tensor,
     so a reordering is a genuinely different cache, not the same one under another name.
+    ``history_len=None`` leaves it out (it does not change per-frame features); with an int and no
+    ``extra`` the digest equals the one older runs wrote.
     """
     h = hashlib.sha1()
-    for part in (kind, str(repo_id), "\x1f".join(camera_names), str(history_len), str(model_name)):
+    parts = [kind, str(repo_id), "\x1f".join(camera_names)]
+    parts += [] if history_len is None else [str(history_len)]
+    for part in parts + [str(model_name)] + list(extra):
         h.update(part.encode("utf-8"))
         h.update(b"\x00")
     h.update(np.asarray(frame_indices, dtype=np.int64).tobytes())
     return h.hexdigest()[:16]
+
+
+def _cache_find_superset(cache_dir: str, base_ds, model_name: str, imagenet_normalize: bool):
+    """Serve a request from a cache of the same dataset whose episodes are a superset.
+
+    Per-frame features depend only on the frame (not on the history length or the episode filter),
+    so a cache built for more episodes answers any subset by indexing its rows; nothing is copied.
+    Only manifests that record ``imagenet_normalize`` are considered, so a cache can never be
+    reused across normalisations. Returns ``(array, index_map)`` or None.
+    """
+    needed = sorted({int(ep) for ep, _ in base_ds.samples})
+    if not os.path.isdir(cache_dir):
+        return None
+    for key in sorted(os.listdir(cache_dir)):
+        man_p = os.path.join(cache_dir, key, "manifest.yaml")
+        if not os.path.isfile(man_p):
+            continue
+        with open(man_p) as f:
+            man = yaml.safe_load(f) or {}
+        if (man.get("kind") != "siglip_frames" or man.get("repo_id") != base_ds.dset.repo_id
+                or list(man.get("camera_names") or []) != list(base_ds.camera_names)
+                or man.get("siglip_model") != model_name
+                or man.get("imagenet_normalize") is None or bool(man["imagenet_normalize"]) != bool(imagenet_normalize)
+                or not set(needed) <= set(man.get("episodes") or [])):
+            continue
+        hit = _cache_load(cache_dir, key)
+        if hit is None:
+            continue
+        arr, _ = hit
+        index_map, row = {}, 0
+        for ep in sorted(int(e) for e in man["episodes"]):   # rows are stored episode by episode
+            ep_start, ep_end = _get_ep_bounds(base_ds.dset.meta, ep)
+            for f in range(ep_start, ep_end):
+                index_map[f] = row
+                row += 1
+        if row != arr.shape[0]:
+            logger.warning("Superset cache %s row count mismatch (%d vs %d); ignored.", key, row, arr.shape[0])
+            continue
+        logger.info("Frame cache SUPERSET HIT [%s]: %d of its %d episodes reused (mmap, no copy).",
+                    key, len(needed), len(man["episodes"]))
+        return arr, index_map
+    return None
 
 
 def _cache_load(cache_dir: str, key: str):
@@ -637,24 +776,43 @@ def precompute_frame_features(gate, base_ds, device, cfg):
     frame_indices = _episode_frame_indices(base_ds)
     index_map = {f: r for r, f in enumerate(frame_indices)}
     model_name = type(getattr(gate.backbone, "siglip_model", None)).__name__
-    key = _cache_key("siglip_frames", base_ds.dset.repo_id, list(base_ds.camera_names),
-                     int(base_ds.history_len), frame_indices, model_name)
+    # Raw-[0,1] features must never be served from an ImageNet-normalised cache (or vice versa);
+    # the extra key part is only added when off so existing cache keys stay valid.
+    norm_key = () if cfg.dataset.imagenet_normalize else ("raw01",)
+    # Per-frame features do not depend on the history length, so it is not part of the key; caches
+    # written under the older history-length-specific keys are still found (and identical).
+    key = _cache_key("siglip_frames", base_ds.dset.repo_id, list(base_ds.camera_names), None,
+                     frame_indices, model_name, *norm_key)
+    legacy = [_cache_key("siglip_frames", base_ds.dset.repo_id, list(base_ds.camera_names),
+                         h, frame_indices, model_name, *norm_key)
+              for h in sorted({int(base_ds.history_len), 1, 6})]
 
     if cfg.cache.reuse_disk:
-        hit = _cache_load(cfg.cache.dir, key)
-        if hit is not None:
-            arr, _ = hit
-            logger.info("Frame cache HIT [%s]: %s loaded from disk (mmap, %.1f MB shared).",
-                        key, tuple(arr.shape), arr.nbytes / 1e6)
-            return arr, index_map
+        for k in [key] + legacy:
+            hit = _cache_load(cfg.cache.dir, k)
+            if hit is not None:
+                arr, _ = hit
+                logger.info("Frame cache HIT [%s]: %s loaded from disk (mmap, %.1f MB shared).",
+                            k, tuple(arr.shape), arr.nbytes / 1e6)
+                return arr, index_map
+        sup = _cache_find_superset(cfg.cache.dir, base_ds, model_name, cfg.dataset.imagenet_normalize)
+        if sup is not None:
+            return sup
         logger.info("Frame cache MISS [%s under %s] — computing.", key, cfg.cache.dir)
 
     # Chunk must clear history_len + 1 or encode_siglip_frames would pad and shift the rows.
     min_chunk = int(getattr(gate.backbone, "history_len", base_ds.history_len)) + 1
     chunk = max(int(cfg.cache.precompute_batch_size), min_chunk)
-    loader = DataLoader(
-        _FrameImageDataset(base_ds.dset, frame_indices, base_ds.camera_names),
-        batch_size=chunk, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
+    if cfg.cache.decode_window > 1:
+        # One item = one window of consecutive frames (already a batch); see _FrameWindowDataset.
+        loader = DataLoader(
+            _FrameWindowDataset(base_ds.dset, frame_indices, base_ds.camera_names,
+                                max(int(cfg.cache.decode_window), min_chunk)),
+            batch_size=None, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
+    else:
+        loader = DataLoader(
+            _FrameImageDataset(base_ds.dset, frame_indices, base_ds.camera_names),
+            batch_size=chunk, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
 
     gate.eval()
     out: List[torch.Tensor] = []
@@ -676,6 +834,7 @@ def precompute_frame_features(gate, base_ds, device, cfg):
     if cfg.cache.reuse_disk:
         d = _cache_store(cfg.cache.dir, key, frame_feats, {
             "kind": "siglip_frames", "repo_id": base_ds.dset.repo_id,
+            "imagenet_normalize": bool(cfg.dataset.imagenet_normalize),
             "camera_names": list(base_ds.camera_names), "history_len": int(base_ds.history_len),
             "siglip_model": model_name, "num_frames": int(frame_feats.shape[0]),
             "shape": list(frame_feats.shape), "dtype": str(frame_feats.dtype),
@@ -885,6 +1044,7 @@ def train(cfg: CompletionGateTrainConfig, on_epoch_end=None) -> str:
     device = torch.device(f"cuda:{cfg.gpu}" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
+    random.seed(cfg.seed)  # SegmentBatchSampler and the random history stride draw from `random`
     run_name = cfg.run_name or build_run_name(cfg)
     # Group every run started on the same calendar day under a YYYYMMDD parent folder, so
     # checkpoints live at {output_dir}/{YYYYMMDD}/{run_name}/ and the eval video lands in
@@ -906,11 +1066,12 @@ def train(cfg: CompletionGateTrainConfig, on_epoch_end=None) -> str:
         logger.info("W&B logging ON -> project=%s run=%s", cfg.wandb.project, run_name)
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    image_transforms = T.Compose([
-        T.ToDtype(torch.float32, scale=True),
-        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
+    image_transforms = T.Compose([T.ToDtype(torch.float32, scale=True)] + (
+        [T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])]
+        if cfg.dataset.imagenet_normalize else []))
     _tol = {} if cfg.dataset.tolerance_s is None else {"tolerance_s": cfg.dataset.tolerance_s}
+    if cfg.dataset.video_backend:
+        _tol["video_backend"] = cfg.dataset.video_backend
     full_dataset = LeRobotDataset(repo_id=cfg.dataset.repo_id, image_transforms=image_transforms, **_tol)
     val_dataset = (LeRobotDataset(repo_id=cfg.dataset.val_repo_id, image_transforms=image_transforms, **_tol)
                    if cfg.dataset.val_repo_id else None)

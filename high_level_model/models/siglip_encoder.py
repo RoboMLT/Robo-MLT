@@ -42,7 +42,15 @@ class SigLIPFrameEncoder(nn.Module):
             model_name, pretrained=pretrained, device=device
         )
         self.vision_output_dim = self.siglip_model.visual.trunk.embed_dim
-        self.tokenizer = open_clip.get_tokenizer(model_name)
+        try:
+            self.tokenizer = open_clip.get_tokenizer(model_name)
+        except OSError:
+            # Hub unreachable: AutoTokenizer first looks up a config.json that the tokenizer repo
+            # does not have, which only resolves online. An empty config skips that lookup and
+            # loads the same tokenizer (identical ids) from the cached tokenizer files.
+            from transformers import PretrainedConfig
+
+            self.tokenizer = open_clip.get_tokenizer(model_name, config=PretrainedConfig())
 
         self.tensor_transform = transforms.Compose([
             transforms.Resize((224, 224), interpolation=transforms.InterpolationMode.BICUBIC),

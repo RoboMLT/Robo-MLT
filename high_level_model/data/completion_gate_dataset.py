@@ -20,6 +20,8 @@ Segment boundaries are precomputed once from the subtask column (no image decodi
 
 import json
 import logging
+
+import numpy as np
 import random
 from collections import Counter
 from itertools import groupby
@@ -74,6 +76,7 @@ class CompletionGateDataset(HighLevelSequenceDataset):
         back_event_column: str = "back_event",
         random_skip_range: int = 0,
         randomize_skip: bool = False,
+        completion_label_column: Optional[str] = None,
         **kwargs,
     ) -> None:
         # Random inter-frame stride (train-time augmentation): instead of a fixed cadence, draw the
@@ -93,6 +96,10 @@ class CompletionGateDataset(HighLevelSequenceDataset):
         # single-subtask episodes to contribute any positives at all.
         self.completion_window = int(completion_window)
         self.completion_at_episode_end = bool(completion_at_episode_end)
+        # Optional explicit per-frame completion labels (e.g. a simulator's physical predicate).
+        # When set they replace the segment-tail rule, which assumes every segment ending at a
+        # transition was completed -- false for policy rollouts whose segment ended in a recover.
+        self.completion_label_column = completion_label_column
         # Runs shorter than this many frames are treated as label-boundary noise: they are dropped
         # from the segment map AND their samples are pruned. 0/1 disables.
         self.min_segment_len = int(min_segment_len)
@@ -104,6 +111,8 @@ class CompletionGateDataset(HighLevelSequenceDataset):
         self.frame_to_seg: Dict[int, Segment] = {}
         self.completion_frames: set = set()
         self._precompute_segments()
+        if self.completion_label_column:
+            self._load_completion_from_column(self.completion_label_column)
         self.back_frames: set = set()
         # Prefer the inline ``back_event`` column written at collection time (decode-free); fall back to
         # the legacy post-hoc JSON annotation only when the column is absent (backward compatibility).
@@ -122,9 +131,24 @@ class CompletionGateDataset(HighLevelSequenceDataset):
         meta = self.dset.meta
         df = meta.tasks if self.use_command_in_meta else getattr(meta, "subtasks", None)
         if df is None or self.index_key not in getattr(df, "columns", []):
-            logger.warning("meta has no '%s' map; skill_text will be empty.", self.index_key)
-            return {}
+            # An empty map would silently condition both heads on "" for every skill (e.g. with a
+            # LeRobot build that writes meta/subtasks.parquet but never loads it).
+            raise RuntimeError(
+                f"meta has no '{self.index_key}' text map (meta/subtasks.parquet missing, or this "
+                "LeRobot build does not load meta.subtasks); refusing to train/evaluate on empty "
+                "skill text."
+            )
         return {int(idx): str(text) for text, idx in df[self.index_key].items()}
+
+    def _load_completion_from_column(self, column: str) -> None:
+        hf = getattr(self.dset, "hf_dataset", None)
+        if hf is None or column not in hf.column_names:
+            raise RuntimeError(f"completion_label_column '{column}' not found in hf_dataset")
+        values = np.asarray(hf[column]).reshape(len(hf), -1)[:, 0]
+        in_use = set(self.frame_to_seg)
+        self.completion_frames = {int(f) for f in np.flatnonzero(values) if int(f) in in_use}
+        logger.info("Completion labels from column '%s': %d positive frames (segment-tail rule off).",
+                    column, len(self.completion_frames))
 
     def _read_index_column(self) -> Optional[List[int]]:
         """Read the integer (sub)task index column from hf_dataset (no image/video decode)."""

@@ -11,8 +11,8 @@
 
 # ── Dataset ──────────────────────────────────────────────────────────────────
 dataset:
-  repo_id: <path/to>/RoboMLT-Lab/tube_sorting
-  recovery_repo_id: <path/to>/RoboMLT-Lab/tube_sorting_recovery
+  repo_id: <path/to/dataset>
+  recovery_repo_id: <path/to/dataset>
   camera_names:               # one global view + two wrist views
     - observation.images.cam_top
     - observation.images.cam_left

@@ -128,6 +128,7 @@ class System2Controller:
         cooldown_steps: int = 10,
         planner_camera: Optional[str] = "observation.images.cam_top",
         allow_inadmissible_plan: bool = False,
+        imagenet_normalize: bool = True,
     ) -> None:
         if pipeline.gate is None:
             raise ValueError("System2Controller needs a pipeline with a monitor (pipeline.gate).")
@@ -142,8 +143,9 @@ class System2Controller:
         self.planner_camera = planner_camera
         self.allow_inadmissible_plan = bool(allow_inadmissible_plan)
 
-        self._mean = torch.tensor(_IMAGENET_MEAN).view(3, 1, 1)
-        self._std = torch.tensor(_IMAGENET_STD).view(3, 1, 1)
+        # Must match the monitor's training transform (sidecar ``imagenet_normalize``).
+        self._mean = torch.tensor(_IMAGENET_MEAN if imagenet_normalize else (0.0, 0.0, 0.0)).view(3, 1, 1)
+        self._std = torch.tensor(_IMAGENET_STD if imagenet_normalize else (1.0, 1.0, 1.0)).view(3, 1, 1)
         self._lock = threading.Lock()
         self._replanning = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=1)
@@ -199,7 +201,8 @@ class System2Controller:
         return cls(pipeline, task_instruction, camera_names, device=device,
                    history_len=history_len, sampling_interval=sampling_interval,
                    cooldown_steps=cooldown_steps, planner_camera=planner_camera,
-                   allow_inadmissible_plan=allow_inadmissible_plan)
+                   allow_inadmissible_plan=allow_inadmissible_plan,
+                   imagenet_normalize=bool(gate_cfg.get("imagenet_normalize", True)))
 
     # ------------------------------------------------------------------ public API
     def current_task(self) -> str:
