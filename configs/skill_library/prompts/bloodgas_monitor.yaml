@@ -1,0 +1,119 @@
+# Zero-shot VLM execution monitor for Task 1: blood gas analysis (baseline, not the method).
+# Pair with configs/skill_library/bloodgas.yaml; loaded by high_level_model/planning/vlm_monitor.py
+# and replayed on recordings by high_level_model/eval/eval_vlm_monitor_offline.py.
+#
+# The "why not just ask a VLM?" baseline: at every System-2 tick the VLM sees the images below,
+# the active skill instruction and that skill's `completed` / `not_yet` / `needs` text, and answers
+# {"completed", "feasible"} -> (gamma, beta) in {0, 1}. `completed` describes what the cameras show
+# at the end of each recorded segment of RoboMLT-Lab/blood_gas_analysis (the last frames are the
+# learned monitor's completion positives); `not_yet` names the in-progress state to tell it apart
+# from. Worded on development episode 241 only (frame-level probes with qwen3.6-plus), then frozen.
+#
+# Placeholders: prompt {images} {text} {completed} {not_yet} {needs}; camera captions {span}
+# (seconds between the first and the last frame of the window).
+
+cameras:                    # sent with every query, in this order
+  - {key: observation.images.cam_top,   frame: first, caption: "top camera, {span:.1f} s ago"}
+  - {key: observation.images.cam_top,   frame: last,  caption: "top camera, now"}
+  - {key: observation.images.cam_left,  frame: last,  caption: "wrist camera of the tube arm, now"}
+  - {key: observation.images.cam_right, frame: last,  caption: "wrist camera of the cap arm, now"}
+image_max_side: 448         # recordings are 640x480
+
+skills:
+  grasp_routine_tube:
+    completed: >-
+      the tube arm has lifted a sample tube (clear, red cap) out of the rack: in the top camera the
+      tube arm is raised again and holds the tube clearly above the rack, and in the tube-arm wrist
+      view the tube stands between the closed grey fingers
+    not_yet: >-
+      while the gripper is still down at the rack with its fingers around the tube in its hole (the
+      tube already stands between the fingers in the wrist view then)
+    needs: a sample tube still standing in the rack, or one already held by the tube arm
+
+  remove_cap:
+    completed: >-
+      the red cap has been pulled off the tube: the tube-arm wrist view shows the clear tube with an
+      open end and no red cap on it, and in the top camera the cap arm has drawn back towards the
+      top left, holding the small red cap away from the tube arm
+    not_yet: >-
+      while the cap arm is still at the tube, both grippers together near the top centre of the top
+      camera, even if it already grips the red cap
+    needs: the sample tube held by the tube arm
+
+  discard_cap:
+    completed: >-
+      the red cap has been dropped into the yellow waste bin and the cap arm has moved back up out
+      of the bin: the cap-arm wrist view shows open, empty fingers and no longer looks into the
+      bin, while the tube arm still holds the open tube
+    not_yet: while the cap arm still holds the red cap or is still reaching down into the bin
+    needs: the removed red cap held by the cap arm, or already dropped into the bin
+
+  dock_to_analyzer:
+    completed: >-
+      the tube arm has carried the open tube to the analyzer and stopped right in front of its
+      sample inlet, the recess on the analyzer front with an orange probe tip inside it: in the
+      cap-arm wrist view the tube arm's green gripper is at the inlet, and in the tube-arm wrist
+      view the white analyzer front fills the lower part of the image below the tube. The tube does
+      not need to be on the probe yet
+    not_yet: >-
+      while the arm is still swinging over from the rack towards the analyzer (the two top-camera
+      images differ clearly)
+    needs: the open sample tube held by the tube arm
+
+  insert_to_probe:
+    completed: >-
+      the tube has been pushed onto the analyzer probe: in the tube-arm wrist view the orange probe
+      base is at the open end of the tube with the thin probe needle inside the tube, and the tube
+      sits in the inlet recess
+    not_yet: while the tube is only lined up in front of the inlet and the probe needle is not inside it
+    needs: the sample tube held by the tube arm at the analyzer inlet
+
+  withdraw_tube:
+    completed: >-
+      the tube has been pulled off the probe and carried away from the analyzer, still held by the
+      tube arm: in the top camera the tube arm is back over the bench (towards the rack or the
+      yellow waste bin), and the tube-arm wrist view no longer shows the analyzer inlet or the
+      orange probe base
+    not_yet: >-
+      while the tube is still on the probe (the analyzer may still be measuring and nothing moves)
+      or the arm is still at the analyzer
+    needs: the sample tube held by the tube arm, on the probe or just pulled off it
+
+  discard_sample:
+    completed: >-
+      the tube has been dropped into the yellow waste bin and the tube arm has moved back up: the
+      gap between the grey fingers in the tube-arm wrist view is empty (you see the bin, the rack or
+      the bench through it, no clear tube), and in the top camera the tube arm is raised above the
+      bin with its fingers spread open
+    not_yet: while a clear tube is still between the grey fingers, even right above the bin
+    needs: the tested sample tube held by the tube arm, or already dropped into the bin
+
+  return_home:
+    completed: >-
+      both arms are raised along the top edge of the top camera, above the rack, with open empty
+      fingers, and they have stopped moving: the two top-camera images look the same
+    not_yet: while an arm is still moving up or back (the two top-camera images differ)
+    needs: nothing
+
+prompt: |
+  You monitor a two-arm laboratory robot that runs blood gas analysis on a bench. In the top
+  camera the blood gas analyzer is the white instrument on the left with a touch screen on its
+  front, the grey block with holes in the middle is the tube rack, and the yellow box at the bottom
+  (labelled 医疗废物, medical waste) is the waste bin. The arm at the top right is the tube arm: it
+  holds the sample tube for the whole cycle. The arm at the top left is the cap arm. In every
+  cycle the tube arm lifts a sample tube (clear, red cap) out of the rack, the cap arm pulls the
+  red cap off and drops the cap into the waste bin, the tube arm brings the open tube to the
+  sample inlet on the analyzer front, pushes it onto the analyzer probe, holds it there while the
+  analyzer measures, pulls it off and drops it into the waste bin. At the end both arms return to
+  their starting pose.
+
+  {images}
+
+  The robot is executing the skill: "{text}"
+  Completed means: {completed}.
+  It is NOT completed {not_yet}.
+  The skill needs {needs}; it is infeasible if that is no longer the case (e.g. the tube was taken
+  out of the gripper or fell).
+
+  Reply with one JSON object and nothing else, no explanation:
+  {{"completed": true or false, "feasible": true or false}}

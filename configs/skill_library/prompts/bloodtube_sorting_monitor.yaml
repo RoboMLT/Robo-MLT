@@ -1,0 +1,89 @@
+# Zero-shot VLM execution monitor for Task 2: blood sample tube sorting (baseline, not the method).
+# Pair with configs/skill_library/bloodtube_sorting.yaml; loaded by
+# high_level_model/planning/vlm_monitor.py and replayed on recordings by
+# high_level_model/eval/eval_vlm_monitor_offline.py.
+#
+# The "why not just ask a VLM?" baseline: at every System-2 tick the VLM sees the images below,
+# the active skill instruction and that skill's `completed` / `not_yet` / `needs` text, and answers
+# {"completed", "feasible"} -> (gamma, beta) in {0, 1}. `completed` describes what the cameras show
+# at the end of each recorded segment of RoboMLT-Lab/tube_sorting, whose captures have the top
+# camera and the working arm's wrist camera only; `not_yet` names the in-progress state to tell it
+# apart from. Worded on development episode 139 only (frame-level probes with qwen3.6-plus), then
+# frozen.
+#
+# Placeholders: prompt {images} {text} {completed} {not_yet} {needs}; camera captions {span}
+# (seconds between the first and the last frame of the window).
+
+cameras:                    # sent with every query, in this order
+  - {key: observation.images.cam_top,  frame: first, caption: "top camera, {span:.1f} s ago"}
+  - {key: observation.images.cam_top,  frame: last,  caption: "top camera, now"}
+  - {key: observation.images.cam_left, frame: last,  caption: "wrist camera of the working arm, now"}
+image_max_side: 448         # recordings are 640x480
+
+skills:
+  grasp_routine_blood_tube:
+    completed: >-
+      the arm has lifted a routine blood tube (RED cap) out of the rack: in the top camera the arm has risen
+      again above the rack and holds the tube high, and in the wrist view a large red cap is right
+      between the fingers, close to the camera
+    not_yet: >-
+      while the gripper is still down at the rack with its fingers around the tube in its hole (the
+      tube can already look large in the wrist view)
+    needs: a red-capped tube still standing in the rack, or one already held by the arm
+
+  grasp_sodium_citrate_tube:
+    completed: >-
+      the arm has lifted a sodium citrate tube (light-BLUE cap) out of the rack: in the top camera the arm has risen
+      again above the rack and holds the tube high, and in the wrist view a large blue cap is right
+      between the fingers, close to the camera
+    not_yet: >-
+      while the gripper is still down at the rack with its fingers around the tube in its hole (the
+      tube can already look large in the wrist view)
+    needs: a blue-capped tube still standing in the rack, or one already held by the arm
+
+  place_to_orange_plate:
+    completed: >-
+      the tube has been dropped into the orange plate and the arm has come back up to its waiting
+      pose above the rack at the top right of the top camera, holding nothing: one more tube lies
+      in the orange plate. The wrist view then looks down at the rack; tubes seen there stand in
+      the rack and are not held
+    not_yet: while the arm still holds the tube, or is still down over the plates
+    needs: a tube held by the arm, or one just dropped into the orange plate
+
+  place_to_blue_plate:
+    completed: >-
+      the tube has been dropped into the blue plate (the dark blue tray) and the arm has come back
+      up to its waiting pose above the rack at the top right of the top camera, holding nothing:
+      one more tube lies in the blue plate. The wrist view then looks down at the rack; tubes seen
+      there stand in the rack and are not held
+    not_yet: while the arm still holds the tube, or is still down over the plates
+    needs: a tube held by the arm, or one just dropped into the blue plate
+
+  return_home:
+    completed: >-
+      the working arm is back at its starting pose at the top right of the top camera, raised
+      above the rack with empty open fingers, and it has stopped moving (the two top-camera images
+      look the same)
+    not_yet: while the arm is still moving up or back (the two top-camera images differ)
+    needs: nothing
+
+prompt: |
+  You monitor a laboratory robot that sorts blood sample tubes on a bench. In the top camera the
+  grey block with holes in the middle is the tube rack; in front of it are two open trays, the
+  orange plate and the dark blue plate (which one is on the left varies). Tubes stand upright in
+  the rack: routine
+  blood tubes have a red cap, sodium citrate tubes a light-blue cap. Sorted tubes lie flat in the
+  plates. The arm at the top right does all the work (the arm at the top left stays still): it
+  lifts one tube at a time out of the rack, drops it into one of the plates and finally returns to
+  its starting pose. In its wrist camera the grey gripper fingers enter from the top of the image.
+
+  {images}
+
+  The robot is executing the skill: "{text}"
+  Completed means: {completed}.
+  It is NOT completed {not_yet}.
+  The skill needs {needs}; it is infeasible if that is no longer the case (e.g. the tube was taken
+  out of the gripper or fell).
+
+  Reply with one JSON object and nothing else, no explanation:
+  {{"completed": true or false, "feasible": true or false}}

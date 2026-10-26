@@ -44,7 +44,8 @@ from torch.utils.data import DataLoader
 from high_level_model.data.completion_gate_dataset import CompletionGateDataset
 from high_level_model.data.high_level_dataset import _get_ep_bounds
 from high_level_model.eval.eval_completion_gate_video import _resolve_gate_sidecar, load_gate
-from high_level_model.eval.gate_metrics import build_eval_pipeline, completion_ap, oracle_plan_from_segments
+from high_level_model.eval.gate_metrics import (build_eval_pipeline, completion_ap, oracle_plan_from_segments,
+                                                switch_verdicts)
 from high_level_model.models.siglip_encoder import build_siglip_encoder
 from high_level_model.planning.skill_library import SkillLibrary
 from high_level_model.training.train_completion_gate import _FrameWindowDataset
@@ -188,12 +189,7 @@ def main() -> None:
             elif info["action"] == "done":
                 done_at = f
         verdicts = []
-        for k, b in enumerate(bounds):
-            if k >= len(switches):
-                verdict, off = "missed", None
-            else:
-                off = switches[k] - b
-                verdict = "premature" if off < -early else ("late" if off > late else "on_time")
+        for k, (b, (verdict, off)) in enumerate(zip(bounds, switch_verdicts(switches, bounds, early, late))):
             verdicts.append(verdict)
             rows.append({"episode": ep, "boundary": k, "from": plan_texts[k], "to": plan_texts[k + 1],
                          "gt_frame": b, "switch_frame": None if k >= len(switches) else switches[k],

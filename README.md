@@ -18,18 +18,19 @@ workspace (teleoperation, recording, recovery-episode labelling) lives on the
 
 ```
 configs/                    All YAML configs
-  skill_library/            atomic-skill libraries + protocol constraints, planner prompts
+  skill_library/            atomic-skill libraries + protocol constraints, planner and VLM-monitor prompts
   system1/train/<task>/     qwen3vl_vla (System 1), pi0, pi05, act, smolvla (baselines)
   system2/train/            completion gate, one config per task (+ *_single_frame ablation)
   inference/                real-robot deployment, one config per task (+ pi05.yaml baseline)
   accelerate/               multi-GPU launch configs
 high_level_model/           System 2 — planner, completion gate, pointer controller
-  planning/                 SkillLibrary, protocol constraints, Planner, System2Pipeline, prompt templates, LLM backend
+  planning/                 SkillLibrary, protocol constraints, Planner, System2Pipeline, prompt templates, LLM backend,
+                            zero-shot VLM monitor baseline
   models/                   siglip_encoder.py (f_phi/h_theta), completion_gate.py (g_psi, gamma_t, beta_t)
   data/                     CompletionGateDataset, release builder, dataset statistics, merge tools
   training/                 train_completion_gate.py
-  eval/                     gate_metrics.py, eval_completion_gate_video.py, figure scripts
-  tests/                    test_system2.py, test_dataset_tools.py
+  eval/                     gate_metrics.py, eval_completion_gate_video.py, offline replays, figure scripts
+  tests/                    test_system2.py, test_dataset_tools.py, test_vlm_monitor.py
 low_level_model/            System 1 — policies, async runtime, real-robot deployment
   models/                   qwen3vl_vla/ (System 1), pi0/, pi05/, act/, smolvla/ (baselines), factory.py
   runtime/                  inference_system1.py, action_smoothing.py
@@ -126,6 +127,7 @@ python -m low_level_model.tests.test_system1
 # Config consistency and dataset tools
 python -m tests.test_paper_alignment
 python -m high_level_model.tests.test_dataset_tools
+python -m high_level_model.tests.test_vlm_monitor
 
 # Per-episode completion-gate visualisation (predicted vs. GT completion/recovery curves)
 python -m high_level_model.eval.eval_completion_gate_video \
@@ -134,6 +136,13 @@ python -m high_level_model.eval.eval_completion_gate_video \
 
 # Closed-loop switch-timing metric (median advance offset vs. GT segment boundaries)
 # — see high_level_model/eval/gate_metrics.py::closed_loop_switch_report
+
+# Zero-shot VLM monitor baseline replayed on recordings at the deployment cadence, with the
+# measured call latency (needs DASHSCOPE_API_KEY; prompts in configs/skill_library/prompts/*_monitor.yaml)
+python -m high_level_model.eval.eval_vlm_monitor_offline \
+    --repo_id <path/to/data>/tube_sorting --skill_library configs/skill_library/bloodtube_sorting.yaml \
+    --monitor_prompt configs/skill_library/prompts/bloodtube_sorting_monitor.yaml \
+    --episodes 0 --out outputs/system2/vlm_monitor/tube_sorting
 ```
 
 `high_level_model/eval/plot_inference_demo.py` and `plot_back_recovery_demo.py` reproduce the

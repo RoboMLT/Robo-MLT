@@ -30,7 +30,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 __all__ = ["closed_loop_switch_report", "completion_ap", "segment_boundaries",
-           "oracle_plan_from_segments"]
+           "oracle_plan_from_segments", "switch_verdicts"]
 
 
 def segment_boundaries(frame_to_seg: dict, ep_start: int, ep_end: int) -> List[int]:
@@ -135,6 +135,22 @@ def completion_ap(probs: Sequence[float], labels: Sequence[float]) -> float:
     tp = np.cumsum(y)
     precision = tp / np.arange(1, len(y) + 1)
     return float((precision * y).sum() / n_pos)
+
+
+def switch_verdicts(switches: Sequence[int], bounds: Sequence[int], early: int, late: int) -> list:
+    """``(verdict, offset)`` per GT boundary: the k-th advance is paired with the k-th boundary.
+
+    ``premature`` earlier than ``boundary - early``, ``on_time`` within [boundary - early,
+    boundary + late], ``late`` after that, ``missed`` when there is no k-th advance (offset None).
+    """
+    out = []
+    for k, b in enumerate(bounds):
+        if k >= len(switches):
+            out.append(("missed", None))
+            continue
+        off = switches[k] - b
+        out.append(("premature" if off < -early else ("late" if off > late else "on_time"), off))
+    return out
 
 
 def closed_loop_switch_report(
