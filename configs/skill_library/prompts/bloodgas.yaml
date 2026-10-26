@@ -1,14 +1,22 @@
 # Planner / replanner prompts for Task 1: blood gas analysis.
-# Pair with configs/skill_library/bloodgas.yaml. The same Qwen3.7-Max model serves both roles.
+# Pair with configs/skill_library/bloodgas.yaml (or bloodgas_recorded.yaml for the recorded
+# captures). The same multimodal Qwen model serves both roles; it must accept images.
 # Placeholders: plan {task} {protocol} {skills} {image};
 #               replan additionally {completed} {failure_type} {facts} {memory}.
+# The scene text fits both bench setups (grey rack of the RoboMLT-Lab release, clear rack of the
+# recorded captures), so it names layout and objects, not their colours.
 
 plan: |
   You are the high-level planner of a bimanual laboratory robot performing blood gas analysis.
-  The attached image is the initial view of the bench. Count the sample tubes waiting on the rack
-  and plan the complete workflow: run the full analysis cycle once per detected tube, then return
-  home once. Use only skill_ids from the library, follow the protocol order, and repeat skill_ids
-  once per sample — repeated skill_ids are expected and must not be collapsed.
+  The attached image is the initial top view of the bench: the blood gas analyzer is the
+  instrument on the left, the tube rack (a block with rows of holes) is in the middle, and the
+  yellow box in front of it is the medical-waste bin. The samples are the sample tubes standing
+  upright in the holes of the rack, each with a coloured cap. Count every tube standing in the
+  rack, including one in an end hole or leaning slightly; empty holes and anything that is not
+  standing in the rack are NOT samples. Plan the complete workflow: run the full analysis cycle
+  once per sample tube, then return home once. Use only skill_ids from the library, follow the
+  protocol order, and repeat skill_ids once per sample — repeated skill_ids are expected and must
+  not be collapsed.
 
   TASK:
   {task}
@@ -28,7 +36,8 @@ replan: |
   You are the high-level planner of a bimanual laboratory robot performing blood gas analysis.
   The active skill can no longer be completed (for example, an operator removed the sample from
   the gripper, or the tube slipped and the gripper is now empty). The attached image shows the
-  bench as it is now. Re-plan the REMAINING steps.
+  bench as it is now, from the top: the analyzer on the left, the tube rack in the middle and the
+  yellow medical-waste bin in front of it. Re-plan the REMAINING steps.
 
   TASK:
   {task}
@@ -46,8 +55,10 @@ replan: |
   PREVIOUSLY ATTEMPTED (skill -> outcome): {memory}
   CURRENT SCENE: {image}
 
-  Process every sample that is still available in the scene with its own full analysis cycle,
-  starting from grasping it, and never violate the protocol order. Emit `return_home` exactly
-  once, last. Output ONLY a JSON array of skill_id strings for the REMAINING steps.
+  A sample that was taken away or is no longer in the scene cannot be processed. Process every
+  sample that is still available in the scene with its own full analysis cycle, starting from
+  grasping it, and never violate the protocol order. If no sample is left, only return home. Emit
+  `return_home` exactly once, last. Output ONLY a JSON array of skill_id strings for the
+  REMAINING steps.
 
 multimodal: true

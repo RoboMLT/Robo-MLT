@@ -1,16 +1,20 @@
 # Planner / replanner prompts for Task 2: blood sample tube sorting.
-# Pair with configs/skill_library/bloodtube_sorting.yaml. The same Qwen3.7-Max model serves both
-# roles. Placeholders: plan {task} {protocol} {skills} {image};
-#                      replan additionally {completed} {failure_type} {facts} {memory}.
+# Pair with configs/skill_library/bloodtube_sorting.yaml. The same multimodal Qwen model serves both
+# roles; it must accept images. Placeholders: plan {task} {protocol} {skills} {image};
+#                                          replan additionally {completed} {failure_type} {facts} {memory}.
+# The plates swap sides between recordings, so they are named by colour only.
 
 plan: |
   You are the high-level planner of a bimanual laboratory robot sorting blood sample tubes.
-  The attached image is the initial top view of the rack. Identify every tube on the rack, its
-  position and its category (routine blood tube or sodium-citrate tube), judging the category by
-  the colour of the outer cap only. Then commit to a feasible pick-and-place order: for each tube,
-  grasp it with the skill of its category and place it into the plate the TASK assigns to that
-  category. Return home exactly once, after the last tube. Use only skill_ids from the library
-  and follow the protocol order.
+  The attached image is the initial top view of the bench: the tube rack (a block with holes) is
+  in the middle, and the two open trays in front of it are the orange plate and the dark blue
+  plate (which one is on the left varies). Identify every tube standing in the rack, its position
+  and its category, judging the category by the colour of the cap only: a red cap is a routine
+  blood tube, a light-blue cap a sodium citrate tube. Tubes already lying in the plates are sorted
+  and must be ignored. Then commit to a feasible pick-and-place order: for each tube, grasp it
+  with the skill of its category and place it into the plate the TASK assigns to that category.
+  Return home exactly once, after the last tube. Use only skill_ids from the library and follow
+  the protocol order.
 
   TASK:
   {task}
@@ -29,8 +33,10 @@ plan: |
 replan: |
   You are the high-level planner of a bimanual laboratory robot sorting blood sample tubes.
   The active skill can no longer be completed (for example, an operator removed the tube from the
-  gripper during placement). The attached image shows the rack and plates as they are now.
-  Re-plan the REMAINING steps.
+  gripper during placement). The attached image shows the rack and plates as they are now, from
+  the top: tubes standing in the rack still need sorting (red cap: routine blood tube, light-blue
+  cap: sodium citrate tube), tubes lying in the orange or dark blue plate are done. Re-plan the
+  REMAINING steps.
 
   TASK:
   {task}
@@ -48,9 +54,10 @@ replan: |
   PREVIOUSLY ATTEMPTED (skill -> outcome): {memory}
   CURRENT SCENE: {image}
 
-  Sort every tube that is still on the rack: grasp it with the skill of its category and place it
-  into the plate the TASK assigns to that category. Never violate the protocol order. Emit
-  `return_home` exactly once, last. Output ONLY a JSON array of skill_id strings for the
+  A tube that was taken away cannot be sorted. Sort every tube that is still standing in the rack:
+  grasp it with the skill of its category and place it into the plate the TASK assigns to that
+  category. Never violate the protocol order. If no tube is left in the rack, only return home.
+  Emit `return_home` exactly once, last. Output ONLY a JSON array of skill_id strings for the
   REMAINING steps.
 
 multimodal: true
