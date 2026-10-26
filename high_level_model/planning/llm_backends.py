@@ -144,6 +144,7 @@ def qwen_llm_fn(
         # compatible with older Qwen models that don't accept this parameter.
         if enable_thinking is not None:
             payload["enable_thinking"] = enable_thinking
+        _call.last_usage = None                  # a failed call must not report the previous usage
         try:
             resp = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
             resp.raise_for_status()
@@ -160,7 +161,9 @@ def qwen_llm_fn(
                     content = content[end + len("</think>"):].strip()
             return content
         except requests.RequestException as exc:
-            raise QwenError(f"Qwen request failed: {exc}") from exc
+            # The body names the cause (e.g. code "Arrearage" for an account out of credit).
+            body = exc.response.text[:300] if getattr(exc, "response", None) is not None else ""
+            raise QwenError(f"Qwen request failed: {exc} {body}".rstrip()) from exc
         except (KeyError, IndexError, ValueError) as exc:
             raise QwenError(f"Unexpected Qwen response format: {exc}") from exc
 
